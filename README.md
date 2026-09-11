@@ -3,19 +3,84 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**Nothing of the game is built yet.** The repo currently holds one thing: a
-connectivity probe that decides whether the planned design is possible.
+**The game is a shell so far.** The registered Web App URL serves a lobby with
+two options; connecting to a game is not built yet. The connectivity probe that
+proved the design possible has moved to `scripts/probe.html` and still runs.
 
-## The probe, and why it exists first
+## Layout
+
+| Path | What it is |
+|------|------------|
+| `index.html` | The card's markup and styling. One 600x600 screen at a time, no scrolling. |
+| `src/reducer.js` | Pure. Owns every state transition and derived value. The only tested module. |
+| `src/render.js` | Writes the DOM from state and reads nothing back. |
+| `src/main.js` | Wires `keydown` to reducer actions and reducer output to the renderer. |
+| `src/firebase-config.js` | The Firebase web config. Public by design — see below. |
+| `test/` | Node's built-in test runner. No dependencies. |
+| `scripts/probe.html` | The connectivity probe, kept as a diagnostic. |
+
+## Running it
+
+Locally:
+
+```bash
+python -m http.server 8000
+```
+
+Then open <http://localhost:8000> and size the window to 600x600. Arrow keys and
+Enter stand in for the Neural Band, the same development loop RecipeGuide uses.
+The probe is at <http://localhost:8000/scripts/probe.html>.
+
+On the glasses:
+
+1. Push this repo and enable GitHub Pages on it.
+2. In the Meta AI app: **App Settings → App Connections → Web Apps → Add a Web
+   App**, then give it a name and the HTTPS Pages URL.
+3. Launch the tile from the glasses app grid.
+
+The registered URL is permanent, so this is a one-time action.
+
+## Tests
+
+```bash
+node --test
+```
+
+No install step and no dependencies, ever. Tests drive the reducer with the
+events a player would produce — move, move, activate — and assert on the
+resulting state. They never reach into how state is shaped, never assert on DOM
+structure and never mock Firebase.
+
+The reducer is the only module with unit tests. The renderer and the entry
+module make no decisions, so testing them would mean asserting against mocks of
+the DOM, which measures the mocks. Those are verified by running the app.
+
+## Input
+
+The Neural Band and temple strip are translated by the glasses OS into exactly
+five keyboard events, and the app listens for nothing else:
+
+- **Up** and **down** move focus between elements.
+- **Left** and **right** move focus within a row. On a single column of options
+  they do nothing.
+- **Enter** activates the focused element.
+
+The grammar is the same on every screen, so a player never has to work out which
+screen they are on before acting. The middle-finger pinch is reserved by the
+system. There is no platform Back — the app owns all reverse navigation, which
+is why the lobby carries its own **Exit App**.
+
+## The probe
 
 The design depends on both players' glasses holding a live connection to
-Firebase. Nobody has confirmed that a Web App running on the glasses is allowed
-to talk to a third-party origin at all. If it is not, the multiplayer design is
-dead and needs rethinking — which is worth discovering in ten minutes rather
-than after the game is written.
+Firebase, and nothing confirmed that a Web App on the glasses may talk to a
+third-party origin at all. `scripts/probe.html` answered that on real hardware
+before any game code was written. All four network checks pass.
 
-`index.html` is that probe. It runs five checks and renders every result on the
-600x600 card, because there is no console to read on the glasses.
+It stays in the repo because it remains the fastest way to tell a broken game
+from a broken network whenever the glasses start behaving oddly. It runs five
+checks and renders every result on the 600x600 card, because there is no console
+to read on the glasses.
 
 | # | Check | Needs a Firebase project? |
 |---|-------|---------------------------|
@@ -36,38 +101,7 @@ not be reported as "the glasses block WebSockets".
 
 Press **Enter** on the glasses to re-run.
 
-## Running it
-
-Locally:
-
-```bash
-python -m http.server 8000
-```
-
-Then open <http://localhost:8000> and size the window to 600x600. Arrow keys and
-Enter stand in for the Neural Band, the same development loop RecipeGuide uses.
-
-On the glasses:
-
-1. Push this repo and enable GitHub Pages on it.
-2. In the Meta AI app: **App Settings → App Connections → Web Apps → Add a Web
-   App**, then give it a name and the HTTPS Pages URL.
-3. Launch the tile from the glasses app grid.
-
-The registered URL is permanent, so this is a one-time action. The game will
-later live at this same URL and the probe will move to `scripts/`.
-
-## Filling in the Firebase config
-
-Check 4 stays skipped — grey, not red — until `src/firebase-config.js` has a
-real config. Create a Firebase project with a Realtime Database, then copy the
-web config from **Project settings → Your apps → Web app**.
-
-That config is **not a secret**. Firebase web configs are public by design;
-access is controlled by database rules, not by hiding the file. Before playing
-over the open internet, set rules so only the game's room path is writable.
-
-## What the verdict means
+### What the verdict means
 
 - **"Firebase multiplayer is viable. Build the game."** All four network checks
   passed. The design holds.
@@ -78,6 +112,16 @@ over the open internet, set rules so only the game's room path is writable.
   needs to change.
 - **"Partial. Read the failing row above."** Something specific broke; the row's
   detail line carries the error.
+
+### Filling in the Firebase config
+
+Check 4 stays skipped — grey, not red — until `src/firebase-config.js` has a
+real config. Create a Firebase project with a Realtime Database, then copy the
+web config from **Project settings → Your apps → Web app**.
+
+That config is **not a secret**. Firebase web configs are public by design;
+access is controlled by database rules, not by hiding the file. Before playing
+over the open internet, set rules so only the game's room path is writable.
 
 ## Platform constraints this is built around
 
