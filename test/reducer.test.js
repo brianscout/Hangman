@@ -9,6 +9,7 @@ import {
   claimSeat,
   focusedOption,
   initialState,
+  maskedWord,
   normalizeRoom,
   reduce,
   wantsRoom,
@@ -32,6 +33,9 @@ const dismissNotice = () => ({ type: 'dismissNotice' });
 const roomWith = (...seats) => ({
   players: { 1: { present: seats.includes(1) }, 2: { present: seats.includes(2) } },
 });
+
+// The same, once the room creator has published a word into it.
+const gameOf = (word, guessed = []) => ({ word, guessed, ...roomWith(1, 2) });
 
 // Deep-frozen before every dispatch, so a reducer that mutates its input throws
 // instead of quietly passing. ES modules are strict mode, so the throw is real.
@@ -183,10 +187,10 @@ test('the first occupant resets a stale room rather than adopting it', () => {
     rematch: { 1: true, 2: false },
   };
 
-  const { seat, room } = claimSeat(abandoned);
+  const { seat, room } = claimSeat(abandoned, 'PLANET');
 
   assert.equal(seat, 1);
-  assert.equal(room.word, null);
+  assert.equal(room.word, 'PLANET');
   assert.deepEqual(room.guessed, []);
   assert.equal(room.turn, 1);
   assert.deepEqual(room.rematch, { 1: false, 2: false });
@@ -195,13 +199,21 @@ test('the first occupant resets a stale room rather than adopting it', () => {
 test('the second occupant takes the free seat and adopts the room', () => {
   const started = { word: 'MARBLE', guessed: ['M'], turn: 1, ...roomWith(1) };
 
-  const { seat, room } = claimSeat(started);
+  const { seat, room } = claimSeat(started, 'PLANET');
 
   assert.equal(seat, 2);
   assert.equal(room.word, 'MARBLE');
   assert.deepEqual(room.guessed, ['M']);
   assert.equal(room.players[1].present, true);
   assert.equal(room.players[2].present, true);
+});
+
+test('the word a joiner brought with them is not written over the live one', () => {
+  // Every client picks a word before it knows which seat it will get. Only the
+  // client that creates the room may publish one; a game already holding MARBLE
+  // must not change word under the first player because a second walked in.
+  const started = { word: 'MARBLE', guessed: ['M'], turn: 1, ...roomWith(1) };
+  assert.equal(claimSeat(started, 'PLANET').room.word, 'MARBLE');
 });
 
 test('a room left holding only the second player is joined at seat one', () => {
@@ -272,6 +284,54 @@ test('keypresses do nothing on a notice screen', () => {
   const abandoned = play([hydrate(roomWith(1))], playing);
 
   assert.equal(play([move('down'), activate()], abandoned), abandoned);
+});
+
+// --- the mystery word -----------------------------------------------------
+
+test('the word is masked as one dash per letter', () => {
+  const playing = play([hydrate(gameOf('PLANET'))], seated(1));
+  assert.equal(maskedWord(playing), '------');
+});
+
+test('the mask is as long as the word however long the word is', () => {
+  for (const word of ['BEACH', 'PLANET', 'JOURNEY', 'MOUNTAIN']) {
+    assert.equal(maskedWord(play([hydrate(gameOf(word))], seated(1))).length, word.length);
+  }
+});
+
+test('a published word reaches the other player', () => {
+  // The room the creator wrote, arriving at the joiner's client as a hydrate.
+  // This is the whole ticket: two players looking at the same word.
+  const joiner = play([hydrate(gameOf('PLANET'))], seated(2));
+  assert.equal(maskedWord(joiner), '------');
+});
+
+test('both players mask the same word the same way', () => {
+  const room = gameOf('MOUNTAIN', ['M', 'N']);
+  assert.equal(
+    maskedWord(play([hydrate(room)], seated(1))),
+    maskedWord(play([hydrate(room)], seated(2))),
+  );
+});
+
+test('a guessed letter shows in its place', () => {
+  const playing = play([hydrate(gameOf('PLANET', ['P']))], seated(1));
+  assert.equal(maskedWord(playing), 'P-----');
+});
+
+test('every occurrence of a guessed letter shows at once', () => {
+  const playing = play([hydrate(gameOf('BANANA', ['A']))], seated(1));
+  assert.equal(maskedWord(playing), '-A-A-A');
+});
+
+test('a wrong guess reveals nothing', () => {
+  const playing = play([hydrate(gameOf('PLANET', ['Z']))], seated(1));
+  assert.equal(maskedWord(playing), '------');
+});
+
+test('there is nothing to mask before a room has arrived', () => {
+  assert.equal(maskedWord(play([])), '');
+  assert.equal(maskedWord(play([activate()])), '');
 });
 
 // --- reading the room -----------------------------------------------------

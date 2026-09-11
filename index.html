@@ -71,6 +71,21 @@
   .option--focused::before { content: '\25B6'; font-size: 20px; }
 
   .notice { flex: none; margin-top: 22px; text-align: center; font-size: 24px; line-height: 1.4; color: var(--dim); }
+
+  /* The mystery word. Monospaced so a dash and the letter that replaces it take
+     the same width — the word must not shuffle sideways underneath a player as
+     it fills in. The longest word in the list is eight letters, which at this
+     size and spacing is 415px of the card's 504px of usable width, and the line
+     box stays inside the 70px this row is budgeted in the play layout. */
+  .word {
+    flex: none;
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    font-size: 64px; font-weight: 700; line-height: 1.05;
+    /* Letter-spacing pads the right edge as well as the gaps; the indent puts
+       the word back on the card's centre line. */
+    letter-spacing: 0.2em; text-indent: 0.2em;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -93,11 +108,10 @@
     </div>
   </main>
 
-  <!-- Placeholder. The word arrives with the next ticket; what this screen has
-       to show today is that both players are in the same game. -->
+  <!-- The gallows and the letter keyboard arrive with later tickets. What this
+       screen has to show today is that both players are looking at one word. -->
   <main class="screen screen--center" id="screen-playing" hidden>
-    <h1 class="headline">GAME ON</h1>
-    <p class="notice">Both players are connected.</p>
+    <p class="word" data-word></p>
   </main>
 
   <!-- Every dead end the app has, sharing one screen. All of them report

@@ -5,7 +5,7 @@
 // Untested on purpose. It makes no decisions, and a test here would assert
 // against a mock of the DOM, which measures the mock.
 
-import { focusedOption } from './reducer.js';
+import { focusedOption, maskedWord } from './reducer.js';
 
 const screens = new Map(
   [...document.querySelectorAll('.screen')].map((node) => [node.id.replace('screen-', ''), node]),
@@ -14,6 +14,7 @@ const options = new Map(
   [...document.querySelectorAll('.option')].map((node) => [node.dataset.option, node]),
 );
 const noticeHeadline = document.querySelector('[data-notice-headline]');
+const word = document.querySelector('[data-word]');
 
 export function render(state) {
   for (const [name, node] of screens) node.hidden = name !== state.screen;
@@ -24,4 +25,6 @@ export function render(state) {
   }
 
   if (state.notice !== null) noticeHeadline.textContent = state.notice;
+
+  word.textContent = maskedWord(state);
 }

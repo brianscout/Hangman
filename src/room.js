@@ -7,6 +7,7 @@
 // the decisions out of an adapter and what is left is a pipe.
 
 import { claimSeat } from './reducer.js';
+import { pickWord } from './words.js';
 import { firebaseConfig } from './firebase-config.js';
 
 // Pinned to the version the connectivity probe verified on the glasses. Only the
@@ -49,12 +50,18 @@ export async function joinRoom(onRoom) {
   const { db, database } = await connect();
   const roomRef = db.ref(database, ROOM_PATH);
 
+  // Drawn once, outside the transaction, and only actually published if this
+  // client turns out to be the one creating the room. A transaction body runs
+  // again whenever it loses a race, and picking inside it would mean the word
+  // that reaches the database is decided by how many times that happened.
+  const word = pickWord();
+
   // A transaction rather than a read followed by a write. Two players pressing
   // Connect at the same moment is the ordinary case here, not a rare race, and a
   // read-then-write would hand them both seat one.
   let seat = null;
   const { committed } = await db.runTransaction(roomRef, (current) => {
-    const claim = claimSeat(current);
+    const claim = claimSeat(current, word);
     seat = claim.seat;
     // Returning nothing aborts. The room is full and there is no seat to take.
     return claim.seat === null ? undefined : claim.room;

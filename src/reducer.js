@@ -79,8 +79,9 @@ function reduceWaiting(state, action) {
   }
 }
 
-// A placeholder until the next ticket gives it a word. It still watches the room,
-// because losing your partner has to end the game from here too.
+// The game itself. Nothing is guessable yet, so every transition here is the room
+// arriving: the word both players are looking at, and the partner who could stop
+// being in it.
 function reducePlaying(state, action) {
   switch (action.type) {
     case 'hydrate':
@@ -146,6 +147,24 @@ export function focusedOption(state) {
   }
 }
 
+// The character standing in for a letter nobody has guessed yet. One per letter,
+// so the length of the word is readable at a glance without counting anything.
+const DASH = '-';
+
+// The word as the card shows it: guessed letters in their places, a dash
+// everywhere else. Derived on every render rather than stored, because the moment
+// two clients each keep their own copy of how far along the word is, they can
+// disagree about it — and the word is the one thing both players must be certain
+// they are looking at together.
+export function maskedWord(state) {
+  const word = state.room?.word ?? null;
+  if (word === null) return '';
+
+  // Every occurrence of a guessed letter is revealed, not just the first. A
+  // player who guesses A in BANANA has earned all three of them.
+  return [...word].map((letter) => (state.room.guessed.includes(letter) ? letter : DASH)).join('');
+}
+
 // Whether this state wants a live seat in the room. The entry module reconciles
 // the connection against this rather than reacting to individual transitions, so
 // no path out of the room can forget to release the seat.
@@ -178,14 +197,24 @@ export function normalizeRoom(room) {
 // the room should contain once taken. The network adapter runs this inside a
 // database transaction; the choice itself lives here so it can be tested without
 // one.
-export function claimSeat(room) {
+//
+// `newWord` is the word to start a game with if this client turns out to be the
+// one creating the room, and is ignored otherwise. It arrives as an argument
+// because picking it at random is the one part of this that cannot be pure, and
+// because publishing it in the same transaction that creates the room is what
+// makes "the player who created the room chose the word" true by construction
+// rather than by a second write that could lose a race with the other player
+// arriving.
+export function claimSeat(room, newWord = null) {
   const current = normalizeRoom(room);
   const present = [current.players[1].present, current.players[2].present];
 
   // An empty room is reset rather than adopted. Whatever is lying in it belongs
   // to a game that is over, and inheriting its word or its guesses would start
   // this game already half played.
-  if (!present[0] && !present[1]) return { seat: 1, room: occupy(normalizeRoom(null), 1) };
+  if (!present[0] && !present[1]) {
+    return { seat: 1, room: occupy({ ...normalizeRoom(null), word: newWord }, 1) };
+  }
 
   if (!present[0]) return { seat: 1, room: occupy(current, 1) };
   if (!present[1]) return { seat: 2, room: occupy(current, 2) };

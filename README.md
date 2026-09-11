@@ -3,11 +3,12 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**Two players can find each other; there is no word yet.** Connecting drops you
-into the single shared room and waits, and a second player arriving starts the
-game on both cards — but the game that starts is a placeholder. The connectivity
-probe that proved the design possible has moved to `scripts/probe.html` and still
-runs.
+**Two players can find each other and see the same word; nothing is guessable
+yet.** Connecting drops you into the single shared room and waits, a second
+player arriving starts the game on both cards, and both cards show the same
+mystery word masked as one dash per letter. The letter keyboard comes next. The
+connectivity probe that proved the design possible has moved to
+`scripts/probe.html` and still runs.
 
 ## Layout
 
@@ -15,6 +16,7 @@ runs.
 |------|------------|
 | `index.html` | The card's markup and styling. One 600x600 screen at a time, no scrolling. |
 | `src/reducer.js` | Pure. Owns every state transition and derived value. The only tested module. |
+| `src/words.js` | The mystery words, as data, plus the one line that draws one. |
 | `src/room.js` | The network adapter. Claims a seat, keeps presence alive, forwards snapshots. Decides nothing. |
 | `src/render.js` | Writes the DOM from state and reads nothing back. |
 | `src/main.js` | Wires `keydown` to reducer actions, reducer output to the renderer, and reducer state to whether a seat is held. |
@@ -38,6 +40,23 @@ Each client maintains a presence flag through the database's own `onDisconnect`
 hook, so quitting, crashing, a flat battery and a lost network all arrive at the
 other player as the same missing flag. Losing your partner shows PARTNER LEFT and
 returns you to the lobby. There is no reconnect grace period.
+
+## The word
+
+Nobody types a word, because the platform has no text input. The client that
+creates the room draws one at random from the bundled list in `src/words.js` —
+about 120 common words, five to eight letters, uppercase A to Z — and publishes
+it in the same transaction that creates the room. That is what makes "the player
+who created the room chose the word" true by construction: there is no second
+write to lose a race with the other player arriving.
+
+Every client draws a word before it knows which seat it will get. A client that
+ends up joining an existing room discards its own and adopts the one already
+there, so the word can only ever be set once per game.
+
+What the card shows is derived from the word and the guesses on every render,
+never stored. The moment each client keeps its own copy of how far along the
+word is, the two of them can disagree about it.
 
 Remote snapshots reach the reducer as a `hydrate` action rather than being read
 where they land. That is what keeps the network out of the test surface: a
@@ -80,8 +99,13 @@ The second player is expressed the same way: as the room their client would have
 written, dispatched as a hydrate. There is no database in the tests and nothing
 standing in for one, because the reducer never sees one.
 
-The reducer is the only module with unit tests. The network adapter, the renderer
-and the entry module make no decisions — the adapter forwards, the renderer
+The word list is tested too, but on its invariants rather than its contents:
+uppercase A to Z, five to eight letters, no duplicates. A word that broke one of
+those would not fail here and there — it would fail on the one round that drew
+it, on the glasses, in front of a friend.
+
+The reducer is otherwise the only module with unit tests. The network adapter,
+the renderer and the entry module make no decisions — the adapter forwards, the renderer
 projects, the entry module wires — so testing them would mean asserting against
 mocks of the Firebase SDK and the DOM, which measures the mocks. Those are
 verified by running the app.
