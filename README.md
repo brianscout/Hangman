@@ -3,9 +3,11 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**The game is a shell so far.** The registered Web App URL serves a lobby with
-two options; connecting to a game is not built yet. The connectivity probe that
-proved the design possible has moved to `scripts/probe.html` and still runs.
+**Two players can find each other; there is no word yet.** Connecting drops you
+into the single shared room and waits, and a second player arriving starts the
+game on both cards — but the game that starts is a placeholder. The connectivity
+probe that proved the design possible has moved to `scripts/probe.html` and still
+runs.
 
 ## Layout
 
@@ -13,11 +15,34 @@ proved the design possible has moved to `scripts/probe.html` and still runs.
 |------|------------|
 | `index.html` | The card's markup and styling. One 600x600 screen at a time, no scrolling. |
 | `src/reducer.js` | Pure. Owns every state transition and derived value. The only tested module. |
+| `src/room.js` | The network adapter. Claims a seat, keeps presence alive, forwards snapshots. Decides nothing. |
 | `src/render.js` | Writes the DOM from state and reads nothing back. |
-| `src/main.js` | Wires `keydown` to reducer actions and reducer output to the renderer. |
+| `src/main.js` | Wires `keydown` to reducer actions, reducer output to the renderer, and reducer state to whether a seat is held. |
 | `src/firebase-config.js` | The Firebase web config. Public by design — see below. |
 | `test/` | Node's built-in test runner. No dependencies. |
 | `scripts/probe.html` | The connectivity probe, kept as a diagnostic. |
+
+## Pairing
+
+There is one room, at the fixed path `room`, because nobody can type a room code
+on a device with no text input. Choosing "Connect to local game" claims a seat in
+it inside a database transaction — two players pressing Connect at the same
+moment is the ordinary case here, not a rare race — and the second player's
+arrival starts the game on both cards with no further input.
+
+The first occupant of an empty room resets it rather than adopting what is in it.
+Whatever is lying there belongs to a game that is over, and inheriting its word or
+its guesses would start this one already half played.
+
+Each client maintains a presence flag through the database's own `onDisconnect`
+hook, so quitting, crashing, a flat battery and a lost network all arrive at the
+other player as the same missing flag. Losing your partner shows PARTNER LEFT and
+returns you to the lobby. There is no reconnect grace period.
+
+Remote snapshots reach the reducer as a `hydrate` action rather than being read
+where they land. That is what keeps the network out of the test surface: a
+two-player game can be played out inside a single test by dispatching one player's
+actions and the other player's room as a hydrate.
 
 ## Running it
 
@@ -51,9 +76,15 @@ events a player would produce — move, move, activate — and assert on the
 resulting state. They never reach into how state is shaped, never assert on DOM
 structure and never mock Firebase.
 
-The reducer is the only module with unit tests. The renderer and the entry
-module make no decisions, so testing them would mean asserting against mocks of
-the DOM, which measures the mocks. Those are verified by running the app.
+The second player is expressed the same way: as the room their client would have
+written, dispatched as a hydrate. There is no database in the tests and nothing
+standing in for one, because the reducer never sees one.
+
+The reducer is the only module with unit tests. The network adapter, the renderer
+and the entry module make no decisions — the adapter forwards, the renderer
+projects, the entry module wires — so testing them would mean asserting against
+mocks of the Firebase SDK and the DOM, which measures the mocks. Those are
+verified by running the app.
 
 ## Input
 

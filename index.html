@@ -32,6 +32,9 @@
     padding: 56px 48px;
   }
   .screen[hidden] { display: none; }
+  /* Screens that are a message rather than a place. Nothing on them is anchored
+     to an edge, so the whole card centres as one block. */
+  .screen--center { justify-content: center; }
 
   .wordmark {
     flex: 1 1 auto;
@@ -42,7 +45,15 @@
     text-indent: 0.14em;
   }
 
-  .options { flex: none; width: 100%; display: flex; flex-direction: column; gap: 14px; }
+  /* One notch below the wordmark. These headlines carry a whole screen on their
+     own, so they are sized to be read at a glance rather than looked at. */
+  .headline {
+    flex: none; text-align: center;
+    font-size: 54px; font-weight: 700; letter-spacing: 0.12em;
+    text-indent: 0.12em;
+  }
+
+  .options { flex: none; width: 100%; display: flex; flex-direction: column; gap: 14px; margin-top: 30px; }
   /* The focused option is marked by a filled bar and a solid border, not by
      colour alone. An additive waveguide renders black as transparent and washes
      mid-tones out, so a hue difference on its own is not a reliable signal in a
@@ -59,7 +70,7 @@
   }
   .option--focused::before { content: '\25B6'; font-size: 20px; }
 
-  .notice { flex: 1 1 auto; display: flex; align-items: center; font-size: 24px; color: var(--dim); }
+  .notice { flex: none; margin-top: 22px; text-align: center; font-size: 24px; line-height: 1.4; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -71,10 +82,36 @@
     </div>
   </main>
 
+  <!-- The pause between pressing Connect and a friend appearing is the longest
+       one in the app, and it is the one a player is most likely to read as a
+       hang. It says what it is waiting for, and it carries its own way out. -->
+  <main class="screen screen--center" id="screen-waiting" hidden>
+    <h1 class="headline">WAITING</h1>
+    <p class="notice">Waiting for another player to connect.<br>The game starts as soon as they do.</p>
+    <div class="options">
+      <div class="option" data-option="leave-waiting">Back to Lobby</div>
+    </div>
+  </main>
+
+  <!-- Placeholder. The word arrives with the next ticket; what this screen has
+       to show today is that both players are in the same game. -->
+  <main class="screen screen--center" id="screen-playing" hidden>
+    <h1 class="headline">GAME ON</h1>
+    <p class="notice">Both players are connected.</p>
+  </main>
+
+  <!-- Every dead end the app has, sharing one screen. All of them report
+       something that has already happened and all of them lead back to the
+       lobby on their own, so the only thing that differs is the headline. -->
+  <main class="screen screen--center" id="screen-notice" hidden>
+    <h1 class="headline" data-notice-headline>PARTNER LEFT</h1>
+    <p class="notice">Returning to the lobby.</p>
+  </main>
+
   <!-- Shown only if the platform declines to close the page, which is what a
        desktop browser does for any page a script did not open. On the glasses
        the app is gone before this is ever seen. -->
-  <main class="screen" id="screen-exited" hidden>
+  <main class="screen screen--center" id="screen-exited" hidden>
     <p class="notice">Closed. You can leave this page.</p>
   </main>
 
