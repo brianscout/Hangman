@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  KEYBOARD_COLUMNS,
+  LETTERS,
   LOBBY_OPTIONS,
   NO_CONNECTION,
   PARTNER_LEFT,
   ROOM_BUSY,
   claimSeat,
+  focusedLetter,
   focusedOption,
   initialState,
   maskedWord,
@@ -350,4 +353,99 @@ test('keys the database dropped read as their defaults', () => {
   assert.equal(sparse.turn, 1);
   assert.equal(sparse.players[2].present, false);
   assert.deepEqual(sparse.rematch, { 1: false, 2: false });
+});
+
+// --- the letter keyboard ---------------------------------------------------
+
+// Where every keyboard test starts: a game underway, with the cursor wherever
+// the card put it. Reaching a letter is expressed as the presses a player would
+// make, not as a cursor index, so these describe movement rather than storage.
+const atGame = () => play([hydrate(gameOf('PLANET'))], seated(1));
+const from = (...directions) => focusedLetter(play(directions.map(move), atGame()));
+
+test('the keyboard is all 26 letters, six to a row', () => {
+  assert.equal(LETTERS.join(''), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+  assert.equal(KEYBOARD_COLUMNS, 6);
+  assert.equal(Math.ceil(LETTERS.length / KEYBOARD_COLUMNS), 5);
+});
+
+test('the keyboard opens on the first letter', () => {
+  assert.equal(focusedLetter(atGame()), 'A');
+});
+
+test('right moves to the next letter in the row', () => {
+  assert.equal(from('right'), 'B');
+  assert.equal(from('right', 'right'), 'C');
+});
+
+test('left moves to the previous letter in the row', () => {
+  assert.equal(from('right', 'right', 'left'), 'B');
+});
+
+test('down moves a whole row on', () => {
+  assert.equal(from('down'), 'G');
+  assert.equal(from('down', 'down'), 'M');
+});
+
+test('up moves a whole row back', () => {
+  assert.equal(from('down', 'down', 'up'), 'G');
+});
+
+test('right wraps around the end of a row', () => {
+  assert.equal(from('left'), 'F');
+  assert.equal(from('right', 'right', 'right', 'right', 'right', 'right'), 'A');
+});
+
+test('left wraps around the start of a row', () => {
+  assert.equal(from('down', 'left'), 'L');
+});
+
+test('down wraps around the bottom of the grid', () => {
+  assert.equal(from('down', 'down', 'down', 'down', 'down'), 'A');
+});
+
+test('up wraps around the top of the grid', () => {
+  assert.equal(from('up'), 'Y');
+});
+
+test('a column the short last row does not have lands on its last letter', () => {
+  // Twenty-six letters do not fill a 6-wide grid, so the last row holds only Y
+  // and Z. Arriving there from further right must land somewhere rather than
+  // nowhere — no direction is ever a dead end.
+  assert.equal(from('right', 'right', 'right', 'right', 'up'), 'Z');
+  assert.equal(from('right', 'right', 'right', 'down', 'down', 'down', 'down'), 'Z');
+});
+
+test('left and right wrap inside the short last row too', () => {
+  assert.equal(from('up', 'right'), 'Z');
+  assert.equal(from('up', 'right', 'right'), 'Y');
+  assert.equal(from('up', 'left'), 'Z');
+});
+
+test('the cursor is still on a letter however far it wanders', () => {
+  const directions = ['up', 'left', 'left', 'down', 'down', 'right', 'up', 'right', 'down'];
+  assert.ok(LETTERS.includes(from(...directions)));
+});
+
+test('Enter does not guess yet', () => {
+  const moved = play([move('down'), move('right')], atGame());
+  assert.equal(play([activate()], moved), moved);
+});
+
+test('moving the cursor changes nothing in the room', () => {
+  // Cursor position is local to each player. Publishing it would mean a database
+  // write on every cursor move, and neither player needs to see the other's.
+  const before = atGame();
+  const after = play([move('down'), move('right'), move('up')], before);
+
+  assert.deepEqual(after.room, before.room);
+  assert.equal(JSON.stringify(after.room).includes('cursor'), false);
+});
+
+test('both players move their own cursors independently', () => {
+  const one = play([move('right')], play([hydrate(gameOf('PLANET'))], seated(1)));
+  const two = play([hydrate(gameOf('PLANET'))], seated(2));
+
+  assert.equal(focusedLetter(one), 'B');
+  assert.equal(focusedLetter(two), 'A');
 });

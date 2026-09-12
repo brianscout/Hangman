@@ -15,6 +15,9 @@
     --content: #f2f4f8;
     --dim: #7d8490;
     --focus: #ffb020;
+    /* Just visible against black, so the keys read as a grid without 26 of them
+       competing with the one that is focused. */
+    --line: #2c313a;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -86,6 +89,42 @@
     letter-spacing: 0.2em; text-indent: 0.2em;
     white-space: nowrap;
   }
+
+  /* The play card is the one screen with three things stacked on it, so its
+     height is budgeted rather than centred: 552px of usable height holding a
+     67px word line and a 254px keyboard, which leaves 231px for the gallows.
+     That is the split the design was drawn to — roughly 220px of gallows, 70px
+     of word and 260px of keyboard inside 50px of padding. Everything here is fixed
+     except the gallows, which takes what is left, because it is the only part
+     that can be drawn to whatever it is given.
+
+     The vertical padding is tighter than the other screens', which have one
+     thing on them and can afford to be generous. */
+  .screen--play { padding: 24px 48px; justify-content: flex-start; }
+  .gallows { flex: 1 1 auto; width: 100%; min-height: 0; }
+
+  /* Six columns and five rows, which is where 26 letters land: the last row
+     holds only Y and Z, and starts at the left edge with the rest. */
+  .keyboard {
+    flex: none; margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(6, 64px);
+    justify-content: center;
+    gap: 8px;
+  }
+  /* The focused key is marked by a filled block and a solid border, not by
+     colour alone. An additive waveguide renders black as transparent and washes
+     mid-tones out, so a hue difference on its own is not a reliable signal in a
+     bright room — the same reason the lobby's focused option is a filled bar. */
+  .key {
+    height: 42px;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid var(--line); border-radius: 8px;
+    font-size: 26px; font-weight: 600; line-height: 1;
+  }
+  .key--focused {
+    border-color: var(--focus); color: var(--ground); background: var(--focus);
+  }
 </style>
 </head>
 <body>
@@ -108,10 +147,16 @@
     </div>
   </main>
 
-  <!-- The gallows and the letter keyboard arrive with later tickets. What this
-       screen has to show today is that both players are looking at one word. -->
-  <main class="screen screen--center" id="screen-playing" hidden>
+  <!-- The play card, in the order a player reads it: how much danger we are in,
+       what we have got so far, and what we can press. The keys themselves are
+       written in by the renderer from the one alphabet the reducer owns. -->
+  <main class="screen screen--play" id="screen-playing" hidden>
+    <!-- The gallows arrives with a later ticket. The space it needs is claimed
+         now, so the card is settled at one screenful with the keyboard on it
+         rather than being re-budgeted once there is something to draw here. -->
+    <div class="gallows"></div>
     <p class="word" data-word></p>
+    <div class="keyboard" data-keyboard></div>
   </main>
 
   <!-- Every dead end the app has, sharing one screen. All of them report

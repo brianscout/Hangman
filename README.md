@@ -3,12 +3,14 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**Two players can find each other and see the same word; nothing is guessable
-yet.** Connecting drops you into the single shared room and waits, a second
-player arriving starts the game on both cards, and both cards show the same
-mystery word masked as one dash per letter. The letter keyboard comes next. The
-connectivity probe that proved the design possible has moved to
-`scripts/probe.html` and still runs.
+**Two players can find each other, see the same word and move around a letter
+keyboard; nothing is guessable yet.** Connecting drops you into the single shared
+room and waits, a second player arriving starts the game on both cards, both
+cards show the same mystery word masked as one dash per letter, and all 26
+letters sit beneath it as a grid the cursor moves around. Enter does nothing on
+the keyboard yet — guessing and turn-passing come next. The connectivity probe
+that proved the design possible has moved to `scripts/probe.html` and still
+runs.
 
 ## Layout
 
@@ -18,7 +20,7 @@ connectivity probe that proved the design possible has moved to
 | `src/reducer.js` | Pure. Owns every state transition and derived value. The only tested module. |
 | `src/words.js` | The mystery words, as data, plus the one line that draws one. |
 | `src/room.js` | The network adapter. Claims a seat, keeps presence alive, forwards snapshots. Decides nothing. |
-| `src/render.js` | Writes the DOM from state and reads nothing back. |
+| `src/render.js` | Writes the DOM from state and reads nothing back, including the 26 keys. |
 | `src/main.js` | Wires `keydown` to reducer actions, reducer output to the renderer, and reducer state to whether a seat is held. |
 | `src/firebase-config.js` | The Firebase web config. Public by design — see below. |
 | `test/` | Node's built-in test runner. No dependencies. |
@@ -62,6 +64,32 @@ Remote snapshots reach the reducer as a `hydrate` action rather than being read
 where they land. That is what keeps the network out of the test surface: a
 two-player game can be played out inside a single test by dispatching one player's
 actions and the other player's room as a hydrate.
+
+## The keyboard
+
+All 26 letters, six to a row, which puts the whole alphabet in five rows and no
+letter more than three presses from any other in either axis. Twenty-six letters
+do not fill a 6-wide grid, so the last row is short: Y and Z and nothing else.
+
+Every edge wraps, in both axes, so no direction is ever a dead end. Left and
+right stay inside their row rather than running on into the next one — a row is
+a place on the card, and a cursor that slid between rows on a horizontal press
+would end up somewhere the player was not looking. Coming down or up into the
+short last row from a column it does not have lands on its last letter, because
+a press that appears to do nothing reads as the app having missed the input.
+
+The cursor is local state and is never published to the room. Publishing it
+would mean a database write on every cursor move, and neither player needs to
+see where the other one is hovering. It is also why two players can be on
+different letters at the same time without the two cards disagreeing about
+anything that matters.
+
+The play card is the one screen with three things stacked on it, so its height is
+budgeted rather than centred: 552px of usable height holding a 67px word line
+and a 254px keyboard, which leaves 231px for the gallows — the split the design
+was drawn to. The gallows arrives with a later ticket, but its space is claimed now,
+so the card is settled at one screenful with the keyboard already on it rather
+than being re-budgeted once there is something to draw up there.
 
 ## Running it
 

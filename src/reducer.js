@@ -16,6 +16,18 @@
 // an index into this list rather than as a label, so movement is arithmetic.
 export const LOBBY_OPTIONS = ['connect', 'exit'];
 
+// The letter keyboard, as data. Every letter of the alphabet, laid out six to a
+// row, which puts the whole thing in five rows and no more than three presses
+// from any letter to any other in either axis. Focus is an index into this list
+// rather than a letter, so movement is arithmetic.
+export const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+export const KEYBOARD_COLUMNS = 6;
+
+// Twenty-six letters do not fill a 6-wide grid, so the last row is short: Y and
+// Z and nothing else. That ragged edge is the only awkward part of moving around
+// this grid, and every rule below that mentions a row length is there for it.
+const KEYBOARD_ROWS = Math.ceil(LETTERS.length / KEYBOARD_COLUMNS);
+
 // Headlines for the brief message screen. Every one of them is a dead end that
 // drops back to the lobby on its own, because none of them is something the
 // player can do anything about from where they are standing.
@@ -24,7 +36,10 @@ export const ROOM_BUSY = 'GAME IN PROGRESS';
 export const NO_CONNECTION = 'NO CONNECTION';
 
 export function initialState() {
-  return { screen: 'lobby', lobbyFocus: 0, seat: null, room: null, notice: null };
+  // The keyboard cursor is local to this client and is never published to the
+  // room. Publishing it would mean a database write on every cursor move, and
+  // neither player needs to see where the other one is hovering.
+  return { screen: 'lobby', lobbyFocus: 0, seat: null, room: null, notice: null, cursor: 0 };
 }
 
 export function reduce(state, action) {
@@ -79,11 +94,14 @@ function reduceWaiting(state, action) {
   }
 }
 
-// The game itself. Nothing is guessable yet, so every transition here is the room
-// arriving: the word both players are looking at, and the partner who could stop
-// being in it.
+// The game itself. Moving the cursor is the only thing a player can do here so
+// far — Enter does not guess yet — and it is the only action in the app that
+// changes nothing outside this client. Everything else is the room arriving: the
+// word both players are looking at, and the partner who could stop being in it.
 function reducePlaying(state, action) {
   switch (action.type) {
+    case 'move':
+      return moveCursor(state, action.direction);
     case 'hydrate':
       return settle({ ...state, room: normalizeRoom(action.room) });
     default:
@@ -145,6 +163,49 @@ export function focusedOption(state) {
     default:
       return null;
   }
+}
+
+// Movement around the keyboard grid. Every edge wraps in both axes, so no
+// direction is ever a dead end and no letter is more than a few presses away
+// from any other.
+function moveCursor(state, direction) {
+  const row = Math.floor(state.cursor / KEYBOARD_COLUMNS);
+  const column = state.cursor % KEYBOARD_COLUMNS;
+
+  const sideways = { left: -1, right: 1 }[direction];
+  if (sideways !== undefined) {
+    // Left and right stay in their row rather than running on into the next one.
+    // A row is a place on the card, and a cursor that slid between rows on a
+    // horizontal press would be somewhere a player was not looking.
+    const width = rowWidth(row);
+    return atLetter(state, row * KEYBOARD_COLUMNS + ((column + sideways + width) % width));
+  }
+
+  const vertically = { up: -1, down: 1 }[direction];
+  if (vertically === undefined) return state;
+
+  const nextRow = (row + vertically + KEYBOARD_ROWS) % KEYBOARD_ROWS;
+
+  // Landing in the short last row from a column it does not have takes the
+  // nearest letter it does. The alternative is a press that appears to do
+  // nothing, which reads as the app having missed the input.
+  const nextColumn = Math.min(column, rowWidth(nextRow) - 1);
+  return atLetter(state, nextRow * KEYBOARD_COLUMNS + nextColumn);
+}
+
+function rowWidth(row) {
+  return Math.min(KEYBOARD_COLUMNS, LETTERS.length - row * KEYBOARD_COLUMNS);
+}
+
+function atLetter(state, cursor) {
+  return cursor === state.cursor ? state : { ...state, cursor };
+}
+
+// The letter Enter would guess. Derived rather than stored for the same reason
+// the masked word is: one cursor index is the whole truth, and a second copy of
+// which letter that is could disagree with it.
+export function focusedLetter(state) {
+  return LETTERS[state.cursor];
 }
 
 // The character standing in for a letter nobody has guessed yet. One per letter,
