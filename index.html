@@ -18,6 +18,9 @@
     /* Just visible against black, so the keys read as a grid without 26 of them
        competing with the one that is focused. */
     --line: #2c313a;
+    /* A letter that has been guessed. Below the live keys and above the grid
+       lines: still readable, plainly finished with. */
+    --spent: #565e6b;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -90,18 +93,31 @@
     white-space: nowrap;
   }
 
-  /* The play card is the one screen with three things stacked on it, so its
+  /* The play card is the one screen with four things stacked on it, so its
      height is budgeted rather than centred: 552px of usable height holding a
-     67px word line and a 254px keyboard, which leaves 231px for the gallows.
-     That is the split the design was drawn to — roughly 220px of gallows, 70px
-     of word and 260px of keyboard inside 50px of padding. Everything here is fixed
-     except the gallows, which takes what is left, because it is the only part
-     that can be drawn to whatever it is given.
+     67px word line, a 36px turn line and a 254px keyboard, which leaves 195px
+     for the gallows. That is close to the split the design was drawn to —
+     roughly 220px of gallows, 70px of word and 260px of keyboard inside 50px of
+     padding — with the turn line taken out of the gallows, because the gallows
+     is the only part that can be drawn to whatever it is given and the only one
+     with room to give.
 
      The vertical padding is tighter than the other screens', which have one
      thing on them and can afford to be generous. */
   .screen--play { padding: 24px 48px; justify-content: flex-start; }
   .gallows { flex: 1 1 auto; width: 100%; min-height: 0; }
+
+  /* Whose turn it is. Small, because it is a status line rather than a thing to
+     look at, and the word above it is what the player is reading. The two states
+     differ in their words as well as their colour: an additive waveguide washes
+     mid-tones out, so a hue on its own is not a signal in a bright room. */
+  .turn {
+    flex: none; margin-top: 12px;
+    font-size: 22px; font-weight: 600; line-height: 1.1;
+    letter-spacing: 0.1em; text-indent: 0.1em;
+    color: var(--dim);
+  }
+  .turn--mine { color: var(--focus); }
 
   /* Six columns and five rows, which is where 26 letters land: the last row
      holds only Y and Z, and starts at the left edge with the rest. */
@@ -125,6 +141,15 @@
   .key--focused {
     border-color: var(--focus); color: var(--ground); background: var(--focus);
   }
+  /* A letter that has been guessed is out of play. It stays legible — which
+     letters have been spent is part of reading the board — but loses its border,
+     so the grid the cursor moves around is the set of keys that still do
+     something. The cursor never stops on one of these. */
+  .key--guessed { border-color: transparent; color: var(--spent); }
+  /* The other player's turn. The whole keyboard goes back, and no key is
+     focused, because a highlighted key on a keyboard that will not answer is an
+     invitation to press it. */
+  .keyboard--locked { opacity: 0.45; }
 </style>
 </head>
 <body>
@@ -156,6 +181,9 @@
          rather than being re-budgeted once there is something to draw here. -->
     <div class="gallows"></div>
     <p class="word" data-word></p>
+    <!-- Whose turn it is, directly above the keyboard it governs, because it is
+         the answer to "why did nothing happen when I pressed that". -->
+    <p class="turn" data-turn></p>
     <div class="keyboard" data-keyboard></div>
   </main>
 

@@ -66,7 +66,7 @@ export async function joinRoom(onRoom) {
     // Returning nothing aborts. The room is full and there is no seat to take.
     return claim.seat === null ? undefined : claim.room;
   });
-  if (!committed || seat === null) return { seat: null, leave() {} };
+  if (!committed || seat === null) return { seat: null, publish() {}, leave() {} };
 
   const presenceRef = db.ref(database, `${ROOM_PATH}/players/${seat}/present`);
 
@@ -80,6 +80,29 @@ export async function joinRoom(onRoom) {
 
   return {
     seat,
+
+    // Merges the reducer's outbox into the room. A merge rather than a write of
+    // the whole document, because the presence flags in it belong to the two
+    // clients that maintain them and this one's copy of the other's is only ever
+    // as fresh as the last snapshot.
+    //
+    // Not a transaction either, unlike claiming a seat. Only the player whose
+    // turn it is may write, and the other player's turn does not begin until
+    // this write has reached them, so there is no second writer to race.
+    publish(fields) {
+      // The local cache applies this before the server hears about it, so the
+      // subscription above reports the guess back immediately and both cards
+      // stay a projection of the room rather than of a pending write.
+      //
+      // Nothing is done with a rejection because there is nothing useful to do
+      // with one. A write made while the network is down is queued and sent on
+      // reconnect rather than rejected, and a connection that does not come back
+      // reaches the other player as the presence flag going out — which is the
+      // one thing that would otherwise leave them waiting for a turn that is
+      // never coming.
+      db.update(roomRef, fields).catch(() => {});
+    },
+
     leave() {
       unsubscribe();
       // Cancel first, then clear. The other order would let the hook fire on a

@@ -5,7 +5,16 @@
 // Untested on purpose. It makes no decisions, and a test here would assert
 // against a mock of the DOM, which measures the mock.
 
-import { LETTERS, focusedLetter, focusedOption, maskedWord } from './reducer.js';
+import {
+  LETTERS,
+  YOUR_TURN,
+  focusedLetter,
+  focusedOption,
+  guessedLetters,
+  isMyTurn,
+  maskedWord,
+  turnNotice,
+} from './reducer.js';
 
 const screens = new Map(
   [...document.querySelectorAll('.screen')].map((node) => [node.id.replace('screen-', ''), node]),
@@ -15,6 +24,8 @@ const options = new Map(
 );
 const noticeHeadline = document.querySelector('[data-notice-headline]');
 const word = document.querySelector('[data-word]');
+const turn = document.querySelector('[data-turn]');
+const keyboard = document.querySelector('[data-keyboard]');
 
 // The keys are written in from the alphabet the reducer owns rather than spelled
 // out in the markup, so the grid cannot come to hold a different set of letters
@@ -26,7 +37,7 @@ const keys = LETTERS.map((letter) => {
   node.textContent = letter;
   return node;
 });
-document.querySelector('[data-keyboard]').append(...keys);
+keyboard.append(...keys);
 
 export function render(state) {
   for (const [name, node] of screens) node.hidden = name !== state.screen;
@@ -40,6 +51,18 @@ export function render(state) {
 
   word.textContent = maskedWord(state);
 
+  const mine = isMyTurn(state);
+  turn.textContent = turnNotice(state);
+  turn.classList.toggle('turn--mine', turn.textContent === YOUR_TURN);
+
+  // No focused key on the other player's turn. The keyboard does not answer a
+  // press then, and a highlighted key is what invites one.
+  keyboard.classList.toggle('keyboard--locked', !mine);
+
+  const guessed = guessedLetters(state);
   const letter = focusedLetter(state);
-  for (const node of keys) node.classList.toggle('key--focused', node.textContent === letter);
+  keys.forEach((node, index) => {
+    node.classList.toggle('key--guessed', guessed.includes(LETTERS[index]));
+    node.classList.toggle('key--focused', mine && LETTERS[index] === letter);
+  });
 }

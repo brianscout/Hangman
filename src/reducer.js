@@ -35,11 +35,31 @@ export const PARTNER_LEFT = 'PARTNER LEFT';
 export const ROOM_BUSY = 'GAME IN PROGRESS';
 export const NO_CONNECTION = 'NO CONNECTION';
 
+// The one line on the play card that differs between the two players. Whose turn
+// it is decides whether a keypress does anything at all, so the card says it
+// rather than leaving a player to discover it by pressing Enter and seeing
+// nothing happen.
+export const YOUR_TURN = 'YOUR TURN';
+export const PARTNER_TURN = "PARTNER'S TURN";
+
 export function initialState() {
   // The keyboard cursor is local to this client and is never published to the
   // room. Publishing it would mean a database write on every cursor move, and
   // neither player needs to see where the other one is hovering.
-  return { screen: 'lobby', lobbyFocus: 0, seat: null, room: null, notice: null, cursor: 0 };
+  //
+  // `outbox` is the opposite: the fields this client owes the room after its
+  // last action, for the entry module to hand to the network. It is a value in
+  // the state rather than a call out of the reducer because the reducer decides
+  // and never does, and because a test can then read what would have been sent.
+  return {
+    screen: 'lobby',
+    lobbyFocus: 0,
+    seat: null,
+    room: null,
+    notice: null,
+    cursor: 0,
+    outbox: null,
+  };
 }
 
 export function reduce(state, action) {
@@ -94,19 +114,51 @@ function reduceWaiting(state, action) {
   }
 }
 
-// The game itself. Moving the cursor is the only thing a player can do here so
-// far — Enter does not guess yet — and it is the only action in the app that
-// changes nothing outside this client. Everything else is the room arriving: the
-// word both players are looking at, and the partner who could stop being in it.
+// The game itself. The keyboard belongs to whichever player the room says is to
+// move, so both presses it understands are inert on the other card — the whole
+// keyboard is locked rather than Enter alone, because a cursor moving around a
+// keyboard that cannot be used is an invitation to press it.
 function reducePlaying(state, action) {
   switch (action.type) {
     case 'move':
-      return moveCursor(state, action.direction);
+      return isMyTurn(state) ? moveCursor(state, action.direction) : state;
+    case 'activate':
+      return guess(state);
     case 'hydrate':
       return settle({ ...state, room: normalizeRoom(action.room) });
     default:
       return state;
   }
+}
+
+// A guess, which is the only thing in the game that changes the room. It is
+// applied here first and published second: the card must answer the press now,
+// and the round trip to the database is not now.
+//
+// Only one player may guess at a time, so two clients writing the room at once
+// is not a race this has to survive — the turn is what serialises them. The
+// second player's guess cannot be made until the first player's has arrived,
+// because until it does it is not their turn.
+function guess(state) {
+  if (!isMyTurn(state)) return state;
+
+  const letter = focusedLetter(state);
+  // The cursor does not rest on a spent key, so this can only fire once every
+  // letter has been guessed. A duplicate in the list would be a lie about how
+  // the game went, and both cards derive what they show from that list.
+  if (state.room.guessed.includes(letter)) return state;
+
+  const guessed = [...state.room.guessed, letter];
+  const turn = partnerSeat(state.seat);
+
+  // Only the two keys that changed are published. Sending the whole room would
+  // put this client's copy of the presence flags back over the partner's, and
+  // the partner's are the one part of the room this client does not own.
+  return placeCursor({
+    ...state,
+    room: { ...state.room, guessed, turn },
+    outbox: { guessed, turn },
+  });
 }
 
 function reduceNotice(state, action) {
@@ -120,6 +172,10 @@ function reduceNotice(state, action) {
 // holds and what the room says — decided in one place. A seat claim and a room
 // snapshot can land in either order, so neither may own the decision alone.
 function settle(state) {
+  return placeCursor(pair(state));
+}
+
+function pair(state) {
   if (state.seat === null || state.room === null) return state;
 
   const partnerPresent = state.room.players[partnerSeat(state.seat)].present;
@@ -168,9 +224,31 @@ export function focusedOption(state) {
 // Movement around the keyboard grid. Every edge wraps in both axes, so no
 // direction is ever a dead end and no letter is more than a few presses away
 // from any other.
+//
+// A letter that has already been guessed is out of play, and the cursor does not
+// stop on one: a press is repeated in the same direction until it lands
+// somewhere that would do something. Skipping is that rule applied to movement,
+// and it is why a player cannot land on a key whose press would be ignored.
 function moveCursor(state, direction) {
-  const row = Math.floor(state.cursor / KEYBOARD_COLUMNS);
-  const column = state.cursor % KEYBOARD_COLUMNS;
+  const guessed = guessedLetters(state);
+
+  let cursor = state.cursor;
+  for (let presses = 0; presses < LETTERS.length; presses += 1) {
+    const next = step(cursor, direction);
+    // An unknown direction, or a sweep that has come all the way back to where
+    // it started because everything else it passed is spent.
+    if (next === null || next === state.cursor) return state;
+
+    cursor = next;
+    if (!guessed.includes(LETTERS[cursor])) return atLetter(state, cursor);
+  }
+  return state;
+}
+
+// One press, before anything is skipped.
+function step(cursor, direction) {
+  const row = Math.floor(cursor / KEYBOARD_COLUMNS);
+  const column = cursor % KEYBOARD_COLUMNS;
 
   const sideways = { left: -1, right: 1 }[direction];
   if (sideways !== undefined) {
@@ -178,11 +256,11 @@ function moveCursor(state, direction) {
     // A row is a place on the card, and a cursor that slid between rows on a
     // horizontal press would be somewhere a player was not looking.
     const width = rowWidth(row);
-    return atLetter(state, row * KEYBOARD_COLUMNS + ((column + sideways + width) % width));
+    return row * KEYBOARD_COLUMNS + ((column + sideways + width) % width);
   }
 
   const vertically = { up: -1, down: 1 }[direction];
-  if (vertically === undefined) return state;
+  if (vertically === undefined) return null;
 
   const nextRow = (row + vertically + KEYBOARD_ROWS) % KEYBOARD_ROWS;
 
@@ -190,7 +268,27 @@ function moveCursor(state, direction) {
   // nearest letter it does. The alternative is a press that appears to do
   // nothing, which reads as the app having missed the input.
   const nextColumn = Math.min(column, rowWidth(nextRow) - 1);
-  return atLetter(state, nextRow * KEYBOARD_COLUMNS + nextColumn);
+  return nextRow * KEYBOARD_COLUMNS + nextColumn;
+}
+
+// Moves the cursor off a letter that has just gone out of play, whichever player
+// guessed it. Without this the cursor would sit on a key whose press does
+// nothing, which reads as the app having stopped listening.
+//
+// Forward through the alphabet, because that is the direction the rest of the
+// keyboard is read in and the nearest letter still worth pressing is the one the
+// eye goes to next.
+function placeCursor(state) {
+  const guessed = guessedLetters(state);
+  if (!guessed.includes(LETTERS[state.cursor])) return state;
+
+  for (let ahead = 1; ahead < LETTERS.length; ahead += 1) {
+    const cursor = (state.cursor + ahead) % LETTERS.length;
+    if (!guessed.includes(LETTERS[cursor])) return { ...state, cursor };
+  }
+  // Every letter guessed. There is nowhere left to stand, and nothing left to
+  // press either.
+  return state;
 }
 
 function rowWidth(row) {
@@ -224,6 +322,38 @@ export function maskedWord(state) {
   // Every occurrence of a guessed letter is revealed, not just the first. A
   // player who guesses A in BANANA has earned all three of them.
   return [...word].map((letter) => (state.room.guessed.includes(letter) ? letter : DASH)).join('');
+}
+
+// Every letter either player has guessed, right or wrong. The card dims these
+// and the cursor steps over them; both of them ask this rather than the room, so
+// there is one answer to what is still in play.
+export function guessedLetters(state) {
+  return state.room?.guessed ?? [];
+}
+
+// How much danger the players are in. Derived from the word and the guesses for
+// the same reason the masked word is: a stored count is a second opinion about a
+// game that must look identical on both cards.
+//
+// Nothing draws this yet. It is counted from here so that the gallows, when it
+// arrives, has nothing to work out for itself.
+export function wrongGuesses(state) {
+  const word = state.room?.word ?? null;
+  if (word === null) return 0;
+
+  return guessedLetters(state).filter((letter) => !word.includes(letter)).length;
+}
+
+// Whether this client may guess. Every press the play card understands asks this
+// first, so there is one answer to it rather than one per key.
+export function isMyTurn(state) {
+  return state.seat !== null && state.room !== null && state.room.turn === state.seat;
+}
+
+// What the card says about whose turn it is, which is the only line on the play
+// screen that reads differently on the two glasses.
+export function turnNotice(state) {
+  return isMyTurn(state) ? YOUR_TURN : PARTNER_TURN;
 }
 
 // Whether this state wants a live seat in the room. The entry module reconciles

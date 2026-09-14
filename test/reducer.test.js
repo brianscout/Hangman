@@ -7,15 +7,21 @@ import {
   LOBBY_OPTIONS,
   NO_CONNECTION,
   PARTNER_LEFT,
+  PARTNER_TURN,
   ROOM_BUSY,
+  YOUR_TURN,
   claimSeat,
   focusedLetter,
   focusedOption,
+  guessedLetters,
   initialState,
+  isMyTurn,
   maskedWord,
   normalizeRoom,
   reduce,
+  turnNotice,
   wantsRoom,
+  wrongGuesses,
 } from '../src/reducer.js';
 
 // Tests are written as the events a player would actually produce — move, move,
@@ -38,7 +44,12 @@ const roomWith = (...seats) => ({
 });
 
 // The same, once the room creator has published a word into it.
-const gameOf = (word, guessed = []) => ({ word, guessed, ...roomWith(1, 2) });
+const gameOf = (word, guessed = [], turn = 1) => ({ word, guessed, turn, ...roomWith(1, 2) });
+
+// The room as the database holds it once a player's client has published their
+// guess: the fields in that client's outbox, written over the room both players
+// share. Hydrating the other player with this is what the network does.
+const published = (state) => ({ ...state.room, ...state.outbox });
 
 // Deep-frozen before every dispatch, so a reducer that mutates its input throws
 // instead of quietly passing. ES modules are strict mode, so the throw is real.
@@ -427,11 +438,6 @@ test('the cursor is still on a letter however far it wanders', () => {
   assert.ok(LETTERS.includes(from(...directions)));
 });
 
-test('Enter does not guess yet', () => {
-  const moved = play([move('down'), move('right')], atGame());
-  assert.equal(play([activate()], moved), moved);
-});
-
 test('moving the cursor changes nothing in the room', () => {
   // Cursor position is local to each player. Publishing it would mean a database
   // write on every cursor move, and neither player needs to see the other's.
@@ -448,4 +454,159 @@ test('both players move their own cursors independently', () => {
 
   assert.equal(focusedLetter(one), 'B');
   assert.equal(focusedLetter(two), 'A');
+});
+
+// --- guessing and turns ----------------------------------------------------
+
+// A game underway, with this client in the named seat and the room in whatever
+// state the test is about. Both players are present, because a game only starts
+// once they are.
+const gameFor = (seat, { word = 'PLANET', guessed = [], turn = 1 } = {}) =>
+  play([hydrate(gameOf(word, guessed, turn))], seated(seat));
+
+// Walking the cursor onto a letter with the presses a player would make: down
+// into its row, then right along it. Written as presses rather than as a cursor
+// index because the cursor skips guessed letters, so which letter a given number
+// of presses lands on is exactly the thing under test elsewhere.
+function reach(state, letter) {
+  const rowOf = (key) => Math.floor(LETTERS.indexOf(key) / KEYBOARD_COLUMNS);
+
+  let current = state;
+  for (let press = 0; press < LETTERS.length; press += 1) {
+    if (focusedLetter(current) === letter) return current;
+    const towards = rowOf(focusedLetter(current)) === rowOf(letter) ? 'right' : 'down';
+    current = play([move(towards)], current);
+  }
+  throw new Error(`the cursor never reached ${letter}`);
+}
+
+const guess = (state, letter) => play([activate()], reach(state, letter));
+
+test('Enter guesses the letter under the cursor', () => {
+  assert.equal(maskedWord(guess(gameFor(1), 'P')), 'P-----');
+});
+
+test('a correct guess reveals every occurrence of that letter at once', () => {
+  // A player who guesses A in BANANA has earned all three of them, and a guess
+  // that had to be repeated would burn a turn saying something already said.
+  assert.equal(maskedWord(guess(gameFor(1, { word: 'BANANA' }), 'A')), '-A-A-A');
+});
+
+test('the turn passes after a correct guess', () => {
+  assert.equal(isMyTurn(guess(gameFor(1), 'P')), false);
+});
+
+test('the turn passes after a wrong guess too', () => {
+  // Both outcomes pass the turn. This is a collaborative game and a player who
+  // kept guessing while they were right would leave the other one watching.
+  const missed = guess(gameFor(1), 'Z');
+  assert.equal(isMyTurn(missed), false);
+  assert.equal(maskedWord(missed), '------');
+});
+
+test('the turn comes back once the partner has guessed', () => {
+  const mine = guess(gameFor(1), 'P');
+  const theirs = play([hydrate(published(mine))], seated(2));
+  const back = play([hydrate(published(guess(theirs, 'L')))], mine);
+
+  assert.equal(isMyTurn(theirs), true);
+  assert.equal(isMyTurn(back), true);
+});
+
+test('a guess made by one player appears on the other player’s card', () => {
+  const mine = guess(gameFor(1), 'A');
+  const theirs = play([hydrate(published(mine))], seated(2));
+
+  assert.equal(maskedWord(theirs), '--A---');
+  assert.deepEqual(guessedLetters(theirs), ['A']);
+});
+
+test('two players fill in a word between them', () => {
+  let one = gameFor(1, { word: 'BANANA' });
+  let two = play([hydrate(gameOf('BANANA', [], 1))], seated(2));
+
+  one = guess(one, 'A');
+  two = play([hydrate(published(one))], two);
+  two = guess(two, 'N');
+  one = play([hydrate(published(two))], one);
+  one = guess(one, 'B');
+
+  assert.equal(maskedWord(one), 'BANANA');
+  assert.equal(isMyTurn(one), false);
+});
+
+test('a guess made out of turn is rejected', () => {
+  // The cursor opens on A, which is in PLANET. Nothing about the press is wrong
+  // except whose turn it is.
+  const waiting = gameFor(2, { turn: 1 });
+  assert.equal(play([activate()], waiting), waiting);
+});
+
+test('the keyboard is inert when it is not this player’s turn', () => {
+  const waiting = gameFor(2, { turn: 1 });
+
+  assert.equal(isMyTurn(waiting), false);
+  assert.equal(play([move('down'), move('right'), move('up')], waiting), waiting);
+});
+
+test('the card says whose turn it is', () => {
+  assert.equal(turnNotice(gameFor(1, { turn: 1 })), YOUR_TURN);
+  assert.equal(turnNotice(gameFor(1, { turn: 2 })), PARTNER_TURN);
+  assert.equal(turnNotice(gameFor(2, { turn: 2 })), YOUR_TURN);
+  assert.equal(turnNotice(gameFor(2, { turn: 1 })), PARTNER_TURN);
+});
+
+test('the wrong-guess count advances only on wrong guesses', () => {
+  assert.equal(wrongGuesses(gameFor(1)), 0);
+  assert.equal(wrongGuesses(guess(gameFor(1), 'P')), 0);
+  assert.equal(wrongGuesses(guess(gameFor(1), 'Z')), 1);
+  assert.equal(wrongGuesses(gameFor(1, { guessed: ['Z', 'Q', 'P'] })), 2);
+});
+
+test('there is nothing wrong yet before a room has arrived', () => {
+  assert.equal(wrongGuesses(play([])), 0);
+  assert.deepEqual(guessedLetters(play([])), []);
+});
+
+test('a guess publishes the guess list and the turn and nothing else', () => {
+  // Only what changed. Writing the whole room would send this client's copy of
+  // the presence flags back over the partner's, which may have moved since.
+  const after = guess(gameFor(1), 'P');
+
+  assert.deepEqual(after.outbox, { guessed: ['P'], turn: 2 });
+  assert.equal('players' in after.outbox, false);
+  assert.equal('word' in after.outbox, false);
+});
+
+test('moving the cursor publishes nothing', () => {
+  assert.equal(play([move('down'), move('right')], gameFor(1)).outbox, null);
+});
+
+// --- letters that are out of play ------------------------------------------
+
+test('the cursor skips a letter that has already been guessed', () => {
+  assert.equal(focusedLetter(play([move('right')], gameFor(1, { guessed: ['B'] }))), 'C');
+});
+
+test('the cursor skips guessed letters in every direction', () => {
+  // A guessed key would do nothing if it were pressed, so the cursor never
+  // stops on one — in either axis, including over the wrap.
+  const state = gameFor(1, { guessed: ['B', 'F', 'G', 'M', 'Y'] });
+
+  assert.equal(focusedLetter(play([move('right')], state)), 'C');
+  assert.equal(focusedLetter(play([move('left')], state)), 'E');
+  assert.equal(focusedLetter(play([move('down')], state)), 'S');
+  assert.equal(focusedLetter(play([move('up')], state)), 'S');
+});
+
+test('the cursor steps off the letter this player has just guessed', () => {
+  assert.equal(focusedLetter(guess(gameFor(1), 'A')), 'B');
+});
+
+test('the cursor steps off a letter the other player has just guessed', () => {
+  const waiting = gameFor(1, { turn: 2 });
+  const guessed = play([hydrate(gameOf('PLANET', ['A'], 1))], waiting);
+
+  assert.equal(focusedLetter(waiting), 'A');
+  assert.equal(focusedLetter(guessed), 'B');
 });

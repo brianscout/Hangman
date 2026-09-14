@@ -3,13 +3,15 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**Two players can find each other, see the same word and move around a letter
-keyboard; nothing is guessable yet.** Connecting drops you into the single shared
-room and waits, a second player arriving starts the game on both cards, both
-cards show the same mystery word masked as one dash per letter, and all 26
-letters sit beneath it as a grid the cursor moves around. Enter does nothing on
-the keyboard yet — guessing and turn-passing come next. The connectivity probe
-that proved the design possible has moved to `scripts/probe.html` and still
+**Two players can play a word out together, turn by turn; winning and losing are
+not handled yet.** Connecting drops you into the single shared room and waits, a
+second player arriving starts the game on both cards, and from there the two
+alternate: the player whose turn it is guesses a letter with Enter, every
+occurrence of it appears on both cards at once, and the turn passes whether the
+guess was right or wrong. The other card's keyboard is locked while it waits.
+Wrong guesses are counted from here on, but nothing draws the gallows yet and a
+completed word simply sits there — the end of a game comes next. The connectivity
+probe that proved the design possible has moved to `scripts/probe.html` and still
 runs.
 
 ## Layout
@@ -19,9 +21,9 @@ runs.
 | `index.html` | The card's markup and styling. One 600x600 screen at a time, no scrolling. |
 | `src/reducer.js` | Pure. Owns every state transition and derived value. The only tested module. |
 | `src/words.js` | The mystery words, as data, plus the one line that draws one. |
-| `src/room.js` | The network adapter. Claims a seat, keeps presence alive, forwards snapshots. Decides nothing. |
+| `src/room.js` | The network adapter. Claims a seat, keeps presence alive, forwards snapshots, publishes guesses. Decides nothing. |
 | `src/render.js` | Writes the DOM from state and reads nothing back, including the 26 keys. |
-| `src/main.js` | Wires `keydown` to reducer actions, reducer output to the renderer, and reducer state to whether a seat is held. |
+| `src/main.js` | Wires `keydown` to reducer actions, reducer output to the renderer and to the room, and reducer state to whether a seat is held. |
 | `src/firebase-config.js` | The Firebase web config. Public by design — see below. |
 | `test/` | Node's built-in test runner. No dependencies. |
 | `scripts/probe.html` | The connectivity probe, kept as a diagnostic. |
@@ -65,6 +67,41 @@ where they land. That is what keeps the network out of the test surface: a
 two-player game can be played out inside a single test by dispatching one player's
 actions and the other player's room as a hydrate.
 
+## Guessing and turns
+
+Every guess passes the turn, right or wrong. This is a collaborative game — one
+word, one gallows, one outcome — and a player who kept the keyboard for as long
+as they kept guessing correctly would leave the other one watching.
+
+The card says whose turn it is, and the whole keyboard is locked on the other
+one: no cursor movement, no focused key, the grid dimmed as a block. Locking
+Enter alone would leave a cursor moving around a keyboard that will not answer,
+which is an invitation to press it. Saying whose turn it is rather than only
+disabling the keys is what makes the locked card read as waiting rather than as
+broken.
+
+A guess is applied locally first and published second, because the card has to
+answer the press now and the round trip to the database is not now. Only the
+two keys that changed are written — the guess list and the turn — never the
+whole room: the presence flags in it belong to the two clients that maintain
+them, and this client's copy of the other's is only ever as fresh as the last
+snapshot it saw.
+
+That write is not a transaction, unlike claiming a seat. Only the player whose
+turn it is may write, and the other player's turn does not begin until this
+write has reached them, so the turn itself is what serialises the two clients and
+there is no second writer to race.
+
+The reducer hands that write out as a value — an `outbox` on the state — rather
+than calling the network, which keeps it pure and lets a test read what would
+have been sent. The entry module publishes an outbox only when it is a new one,
+so a snapshot arriving from the room is never echoed straight back into it.
+
+The count of wrong guesses is derived from the word and the guess list rather
+than stored, for the same reason the masked word is. Nothing draws it yet; it is
+counted from here so the gallows has nothing to work out for itself when it
+arrives.
+
 ## The keyboard
 
 All 26 letters, six to a row, which puts the whole alphabet in five rows and no
@@ -78,18 +115,29 @@ would end up somewhere the player was not looking. Coming down or up into the
 short last row from a column it does not have lands on its last letter, because
 a press that appears to do nothing reads as the app having missed the input.
 
+A letter that has been guessed is out of play, so the cursor does not stop on
+one: a press is repeated in the same direction until it lands on a key that
+would do something. It is impossible to focus a spent letter, and so impossible
+to press one and see nothing happen. Guessed keys stay on the card, dimmed and
+without their border — which letters have been spent is part of reading the
+board — but they are no longer places the cursor can be. A letter that goes out
+of play underneath the cursor, guessed by either player, moves it forward to the
+next letter still worth pressing.
+
 The cursor is local state and is never published to the room. Publishing it
 would mean a database write on every cursor move, and neither player needs to
 see where the other one is hovering. It is also why two players can be on
 different letters at the same time without the two cards disagreeing about
 anything that matters.
 
-The play card is the one screen with three things stacked on it, so its height is
-budgeted rather than centred: 552px of usable height holding a 67px word line
-and a 254px keyboard, which leaves 231px for the gallows — the split the design
-was drawn to. The gallows arrives with a later ticket, but its space is claimed now,
-so the card is settled at one screenful with the keyboard already on it rather
-than being re-budgeted once there is something to draw up there.
+The play card is the one screen with several things stacked on it, so its height
+is budgeted rather than centred: 552px of usable height holding a 67px word line,
+a 36px turn line and a 254px keyboard, which leaves 195px for the gallows. The
+gallows arrives with a later ticket, but its space is claimed now, so the card is
+settled at one screenful rather than being re-budgeted once there is something to
+draw up there. It is also the only part of the card that can be drawn to whatever
+it is given, which is why the turn line came out of its share and not out of the
+word or the keys.
 
 ## Running it
 
@@ -125,7 +173,9 @@ structure and never mock Firebase.
 
 The second player is expressed the same way: as the room their client would have
 written, dispatched as a hydrate. There is no database in the tests and nothing
-standing in for one, because the reducer never sees one.
+standing in for one, because the reducer never sees one. A whole word is played
+out that way in a single test — one player guesses, their outbox is written over
+the shared room, the other player is hydrated with it, and the turn comes back.
 
 The word list is tested too, but on its invariants rather than its contents:
 uppercase A to Z, five to eight letters, no duplicates. A word that broke one of

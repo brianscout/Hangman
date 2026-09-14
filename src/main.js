@@ -35,8 +35,14 @@ function dispatch(action) {
   // costs nothing and cannot repaint the card.
   if (next === state) return;
 
+  // The reducer hands the room what it owes it as a value. A fresh one means
+  // this transition produced something to send; the same one means it did not,
+  // which is what keeps a snapshot arriving from being echoed straight back.
+  const outbox = next.outbox === state.outbox ? null : next.outbox;
+
   state = next;
   render(state);
+  if (outbox !== null) seatHeld?.publish(outbox);
   syncSeat();
   syncNoticeTimer();
   if (state.screen === 'exited') exitApp();
