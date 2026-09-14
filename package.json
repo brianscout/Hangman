@@ -1,0 +1,5 @@
+{
+  "name": "hangman",
+  "private": true,
+  "type": "module"
+}
