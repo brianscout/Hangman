@@ -28,6 +28,7 @@ a dead game. The connectivity probe that proved the design possible has moved to
 | `src/render.js` | Writes the DOM from state and reads nothing back, including the 26 keys. |
 | `src/main.js` | Wires `keydown` to reducer actions, reducer output to the renderer and to the room, and reducer state to whether a seat is held. |
 | `src/firebase-config.js` | The Firebase web config. Public by design — see below. |
+| `database.rules.json` | The database security rules, as deployed. The record of them. |
 | `test/` | Node's built-in test runner. No dependencies. |
 | `scripts/probe.html` | The connectivity probe, kept as a diagnostic. |
 
@@ -239,12 +240,15 @@ The probe is at <http://localhost:8000/scripts/probe.html>.
 
 On the glasses:
 
-1. Push this repo and enable GitHub Pages on it.
-2. In the Meta AI app: **App Settings → App Connections → Web Apps → Add a Web
+1. Deploy [`database.rules.json`](database.rules.json) to the Firebase project, if
+   it is not already live. A Pages URL is a public URL, and the database behind it
+   is only as closed as its rules.
+2. Push this repo and enable GitHub Pages on it.
+3. In the Meta AI app: **App Settings → App Connections → Web Apps → Add a Web
    App**, then give it a name and the HTTPS Pages URL.
-3. Launch the tile from the glasses app grid.
+4. Launch the tile from the glasses app grid.
 
-The registered URL is permanent, so this is a one-time action.
+The registered URL is permanent, so steps 2 to 4 are a one-time action.
 
 ## Tests
 
@@ -312,7 +316,7 @@ third-party origin at all. `scripts/probe.html` answered that on real hardware
 before any game code was written. All four network checks pass.
 
 It stays in the repo because it remains the fastest way to tell a broken game
-from a broken network whenever the glasses start behaving oddly. It runs five
+from a broken network whenever the glasses start behaving oddly. It runs six
 checks and renders every result on the 600x600 card, because there is no console
 to read on the glasses.
 
@@ -321,13 +325,19 @@ to read on the glasses.
 | 1 | Cross-origin `fetch` to `gstatic.com` | no |
 | 2 | Dynamic `import()` of the Firebase SDK from that CDN | no |
 | 3 | `WebSocket` open to a third-party host | no |
-| 4 | Firebase RTDB connect + write/read round trip | **yes** |
-| 5 | Input vocabulary — all four arrows and Enter | no |
+| 4 | Firebase RTDB connect + read of the room | **yes** |
+| 5 | Database rules deployed — two denied writes are refused | **yes** |
+| 6 | Input vocabulary — all four arrows and Enter | no |
 
 Checks 1–3 answer most of the question on their own. Check 4 is the
-authoritative one: it does exactly what the game will do. Check 5 is passive and
-confirms the documented input model on real hardware, since the glasses are
-already on.
+authoritative one: it does exactly what the game does. Check 5 is the only way
+from inside the app to tell rules that shipped from rules that did not — see
+[Database rules](#database-rules). Check 6 is passive and confirms the documented
+input model on real hardware, since the glasses are already on.
+
+Check 4 reads the room rather than writing a scratch value somewhere, because
+the rules no longer leave anywhere to scratch and because the room is a live
+game: a probe that wrote to it would knock over a game being played in it.
 
 Check 3 tries three echo endpoints in turn and passes if any opens. One public
 echo service was already down during development, and a single dead host must
@@ -337,13 +347,15 @@ Press **Enter** on the glasses to re-run.
 
 ### What the verdict means
 
-- **"Firebase multiplayer is viable. Build the game."** All four network checks
-  passed. The design holds.
+- **"Network reaches Firebase and the rules are live."** Every network check
+  passed and the database is not world-writable.
 - **"Network works. Add a Firebase config to confirm."** Checks 1–3 passed and
   check 4 has no config yet. Encouraging but not conclusive.
 - **"No third-party network at all. Redesign required."** The glasses will not
   reach another origin. Multiplayer over Firebase is impossible and the plan
   needs to change.
+- **"Database is wide open. Deploy database.rules.json."** The network is fine
+  and a write that must be refused was accepted. Fix this before anyone plays.
 - **"Partial. Read the failing row above."** Something specific broke; the row's
   detail line carries the error.
 
@@ -354,8 +366,60 @@ real config. Create a Firebase project with a Realtime Database, then copy the
 web config from **Project settings → Your apps → Web app**.
 
 That config is **not a secret**. Firebase web configs are public by design;
-access is controlled by database rules, not by hiding the file. Before playing
-over the open internet, set rules so only the game's room path is writable.
+access is controlled by database rules, not by hiding the file. Deploy
+`database.rules.json` to the same project before anybody plays — see below.
+
+## Database rules
+
+`database.rules.json` is what stops the database being world-writable, and it is
+the record of the rules as well as the source of them: the Firebase console is
+where they take effect and nowhere a change can be reviewed, diffed or restored,
+so the text lives here and is pasted there. Nothing enforces that the two agree,
+which is what check 5 of the probe is for.
+
+Nobody signs in. The platform has no text input, so there is no account to sign
+into, which means a rule cannot ask *who* is writing — only *where* and *what
+shape*. The rules are built out of exactly that:
+
+- everything is denied at the root, and granted back only on `room`
+- inside `room`, only the five keys the game stores are accepted; any other key
+  is rejected, along with everything under it
+- each of the five is shape-checked — a word is five to eight uppercase letters,
+  `guessed` is a list of single letters, `turn` and both seat numbers are 1 or 2,
+  and the presence and rematch flags are booleans
+
+Whose turn it is stays the reducer's business. A rule cannot tell the two players
+apart, so it cannot enforce a turn, and the room is open to anyone who has the
+URL. What the rules buy is that a write to it has to be recognisable as a move in
+this game rather than arbitrary data, and that the rest of the database — every
+path the game does not use, including the `probe` path the connectivity probe
+used to scribble on — is closed.
+
+### Deploying them
+
+Paste the file into **Firebase console → Realtime Database → Rules** and publish.
+Comments are allowed there and are part of the file; keep them. There is no
+`firebase.json` in this repo and no CLI step: one file, pasted, on the rare
+occasions it changes.
+
+They replaced Firebase's test mode, which was world-readable and world-writable
+until a fixed expiry date — right for the probe, wrong to ship, and due to expire
+into a database that denied everything.
+
+### When they are wrong
+
+A permission error reads almost exactly like a connectivity failure, and that is
+a genuinely bad thing to debug while wearing glasses. Both look like Connect
+never finishing.
+
+Two ways to tell them apart, in the order worth trying:
+
+1. Run `scripts/probe.html`. Check 4 failing with `PERMISSION_DENIED` is rules
+   too tight; check 5 failing is rules too loose or never deployed; check 1
+   failing is the network.
+2. Open the app in a desktop browser and read the console. The SDK logs a
+   permission error in full there, which is the whole reason to reach for a
+   browser over the glasses when something is wrong.
 
 ## Platform constraints this is built around
 

@@ -1,0 +1,94 @@
+// Realtime Database security rules. This file is the record of them: the console
+// is where they take effect, but the console is not somewhere a change can be
+// reviewed, diffed or restored, so the text lives here and is pasted there.
+//
+// These replace Firebase's test mode, which was world-readable and world-writable
+// until a fixed expiry date. Test mode was the right setting for the connectivity
+// probe and the wrong one to ship: the database URL is in the client bundle,
+// because a browser app has to receive its config, so "nobody knows the URL" was
+// never the control. The rules are the control.
+//
+// What they can and cannot do. Nobody signs in — the platform has no text input,
+// so there is no account to sign into — which means a rule cannot ask *who* is
+// writing. It can only ask *where* and *what shape*. So the room is open to
+// anyone who has the URL, and everything below is about keeping a write to it
+// recognisable as a move in this game rather than arbitrary data:
+//
+//   - only `room` is readable or writable at all; the rest of the database,
+//     including the `probe` path the connectivity probe used to scribble on, is
+//     denied outright
+//   - inside `room`, only the five keys the game actually stores exist, and a
+//     key that is not one of them is rejected
+//   - each of those five is checked for its own shape, so a word has to look
+//     like a word and a seat has to be seat one or seat two
+//
+// Whose turn it is stays the reducer's business. A rule cannot tell the two
+// players apart, so it cannot enforce a turn, and pretending otherwise here would
+// be security theatre in a file whose whole job is to be honest about the line.
+{
+  "rules": {
+    // Denied at the root and granted back only on `room`. Stated rather than
+    // left implicit: an absent rule already denies, but a reader deserves to see
+    // that the default was chosen and not forgotten.
+    ".read": false,
+    ".write": false,
+
+    "room": {
+      // The one room. Both players read all of it — the room *is* the game state
+      // — and both write to it, because either of them may be the one who
+      // creates it, and the turn alternates between them.
+      ".read": true,
+      ".write": true,
+
+      // Five to eight letters, uppercase A to Z. The same range `src/words.js`
+      // draws from and `test/words.test.js` holds it to.
+      "word": {
+        ".validate": "newData.isString() && newData.val().matches(/^[A-Z]{5,8}$/)"
+      },
+
+      // A list, and a list of single letters. `hasChildren()` is what rejects a
+      // bare string or number written over the whole list; the per-index rule is
+      // what rejects anything that is not a letter inside it.
+      //
+      // Neither rule fires when the list is removed, which is what an empty
+      // `guessed` is stored as and how a rematch clears it. Validation rules do
+      // not run against a deletion.
+      "guessed": {
+        ".validate": "newData.hasChildren()",
+        "$index": {
+          ".validate": "$index.matches(/^[0-9]+$/) && newData.isString() && newData.val().matches(/^[A-Z]$/)"
+        }
+      },
+
+      // Seat one or seat two. There is no seat three.
+      "turn": {
+        ".validate": "newData.isNumber() && (newData.val() === 1 || newData.val() === 2)"
+      },
+
+      // Presence, one flag per seat, maintained by the client sitting in it
+      // through an `onDisconnect` hook. A seat holds nothing else.
+      "players": {
+        "$seat": {
+          ".validate": "$seat === '1' || $seat === '2'",
+          "present": { ".validate": "newData.isBoolean()" },
+          "$field": { ".validate": false }
+        }
+      },
+
+      // Rematch acceptance, one flag per seat, written at its own path so that
+      // two players accepting at the same moment cannot overwrite each other.
+      "rematch": {
+        "$seat": {
+          ".validate": "($seat === '1' || $seat === '2') && newData.isBoolean()"
+        }
+      },
+
+      // Anything else in the room. A named rule above wins over this wildcard,
+      // so this catches exactly the keys that are not part of the game and
+      // rejects them and everything under them. Without it the room would be
+      // writable but unbounded, and `onValue` on the room streams whatever is
+      // there to both players.
+      "$key": { ".validate": false }
+    }
+  }
+}

@@ -14,7 +14,9 @@ export const firebaseConfig = {
   projectId: 'hangman-2ecd2',
 };
 
-// Database rules are currently Firebase's test mode: world-readable and
-// world-writable until 2026-10-11 07:00 UTC, after which every read and write is
-// denied. The failure mode is a permission error that reads like a connectivity
-// break, so replace these rules with scoped ones before that date.
+// What keeps this safe to publish is `database.rules.json`, not this file. The
+// rules there deny the whole database except the one `room` path, and check the
+// shape of every key written to it. Deploy them to whatever project this config
+// points at, because the two states a project is in without them are both bad:
+// still in Firebase's test mode, which is world-writable, or past the date test
+// mode expires, which denies everything and reads exactly like a dead network.
