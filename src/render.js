@@ -11,8 +11,10 @@ import {
   focusedOption,
   gameStatus,
   guessedLetters,
+  isGameOver,
   isMyTurn,
   maskedWord,
+  rematchNotice,
   statusNotice,
   wrongGuesses,
 } from './reducer.js';
@@ -27,6 +29,8 @@ const noticeHeadline = document.querySelector('[data-notice-headline]');
 const word = document.querySelector('[data-word]');
 const status = document.querySelector('[data-status]');
 const keyboard = document.querySelector('[data-keyboard]');
+const endgame = document.querySelector('[data-endgame]');
+const endgameNotice = document.querySelector('[data-endgame-notice]');
 
 // The six body parts, in the order the markup draws them: head, body, arms,
 // legs. Document order is draw order, so how many to show is the whole of what
@@ -74,6 +78,14 @@ export function render(state) {
   // game that has finished. The keyboard does not answer a press then, and a
   // highlighted key is what invites one.
   keyboard.classList.toggle('keyboard--locked', !mine);
+
+  // The keyboard hands the card over to the two options when the game ends.
+  // There is nothing left to guess, and the options want the room the keys were
+  // taking up.
+  const over = isGameOver(state);
+  keyboard.hidden = over;
+  endgame.hidden = !over;
+  endgameNotice.textContent = rematchNotice(state);
 
   const guessed = guessedLetters(state);
   const letter = focusedLetter(state);

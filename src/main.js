@@ -8,6 +8,7 @@
 import { initialState, reduce, wantsRoom } from './reducer.js';
 import { render } from './render.js';
 import { joinRoom } from './room.js';
+import { pickWord } from './words.js';
 
 // The Neural Band and temple strip are translated by the glasses OS into exactly
 // these five keyboard events, and nothing else ever arrives. Arrow keys on a
@@ -30,7 +31,13 @@ let claiming = false;
 let noticeTimer = null;
 
 function dispatch(action) {
-  const next = reduce(state, action);
+  // Every action carries a freshly drawn word, which the reducer uses only if
+  // this transition turns out to be the one that starts another round. Drawn
+  // here rather than in the reducer for the same reason the room's first word
+  // is drawn in the adapter: picking at random is the one part of starting a
+  // game that cannot be pure, and the reducer decides rather than does. Drawing
+  // one that is thrown away costs an array index.
+  const next = reduce(state, { ...action, newWord: pickWord() });
   // The reducer returns the same object when nothing changed, so an inert press
   // costs nothing and cannot repaint the card.
   if (next === state) return;

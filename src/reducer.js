@@ -16,6 +16,11 @@
 // an index into this list rather than as a label, so movement is arithmetic.
 export const LOBBY_OPTIONS = ['connect', 'exit'];
 
+// The two ways out of a finished game, in the order they appear at the bottom of
+// the play card. Focus is an index into this list for the same reason the
+// lobby's is: movement is arithmetic.
+export const END_OPTIONS = ['rematch', 'exit-to-lobby'];
+
 // The letter keyboard, as data. Every letter of the alphabet, laid out six to a
 // row, which puts the whole thing in five rows and no more than three presses
 // from any letter to any other in either axis. Focus is an index into this list
@@ -56,6 +61,12 @@ export const YOU_LOSE = 'YOU LOSE';
 // places — the card runs out of figure at exactly the guess this loses on.
 export const MAX_WRONG = 6;
 
+// Shown to the player who has asked for another round and whose partner has not
+// answered yet. A rematch needs both of them, so one of them is always left
+// waiting for a moment — and a pause with nothing said about it is exactly what
+// a player reads as the app having stopped.
+export const WAITING_FOR_PARTNER = 'Waiting for your partner to accept.';
+
 export function initialState() {
   // The keyboard cursor is local to this client and is never published to the
   // room. Publishing it would mean a database write on every cursor move, and
@@ -68,6 +79,7 @@ export function initialState() {
   return {
     screen: 'lobby',
     lobbyFocus: 0,
+    endFocus: 0,
     seat: null,
     room: null,
     notice: null,
@@ -116,9 +128,9 @@ function reduceWaiting(state, action) {
       // shows up must not be stuck here.
       return initialState();
     case 'joined':
-      return settle({ ...state, seat: action.seat });
+      return settle({ ...state, seat: action.seat }, action.newWord);
     case 'hydrate':
-      return settle({ ...state, room: normalizeRoom(action.room) });
+      return settle({ ...state, room: normalizeRoom(action.room) }, action.newWord);
     case 'joinRejected':
       return { ...state, screen: 'notice', notice: ROOM_BUSY };
     case 'joinFailed':
@@ -128,21 +140,109 @@ function reduceWaiting(state, action) {
   }
 }
 
-// The game itself. The keyboard belongs to whichever player the room says is to
-// move, so both presses it understands are inert on the other card — the whole
-// keyboard is locked rather than Enter alone, because a cursor moving around a
-// keyboard that cannot be used is an invitation to press it.
+// The game itself, and the end of it. The keyboard belongs to whichever player
+// the room says is to move, so both presses it understands are inert on the
+// other card — the whole keyboard is locked rather than Enter alone, because a
+// cursor moving around a keyboard that cannot be used is an invitation to press
+// it.
+//
+// A finished game hands the card over to the two options at the bottom of it.
+// The keyboard has gone by then — there is nothing left to guess — so the same
+// two presses mean something else rather than meaning nothing.
 function reducePlaying(state, action) {
+  const over = gameStatus(state) !== 'playing';
+
   switch (action.type) {
     case 'move':
+      if (over) return moveEndFocus(state, action.direction);
       return isMyTurn(state) ? moveCursor(state, action.direction) : state;
     case 'activate':
-      return guess(state);
+      return over ? activateEnd(state, action.newWord) : guess(state);
     case 'hydrate':
-      return settle({ ...state, room: normalizeRoom(action.room) });
+      return hydratePlaying(state, action);
     default:
       return state;
   }
+}
+
+// A room snapshot arriving mid-game, or carrying the start of the next round.
+//
+// A guess list that has got shorter is the whole of how a new round is
+// recognised: guesses only ever accumulate within one, so nothing else can take
+// any away. The cursor and the option focus are this client's own and appear
+// nowhere in the room, so nothing in a snapshot can put them back — they are put
+// back here.
+function hydratePlaying(state, action) {
+  const room = normalizeRoom(action.room);
+  const started = room.guessed.length < guessedLetters(state).length;
+
+  return settle({ ...state, room, ...(started ? freshRound() : null) }, action.newWord);
+}
+
+// What the next round owes this client, on top of whatever the room says. Both
+// of these are places on the card rather than facts about the game, which is why
+// neither of them is in the room to begin with.
+function freshRound() {
+  return { cursor: 0, endFocus: 0 };
+}
+
+// The press a finished game understands, which is one of exactly two things.
+function activateEnd(state, newWord) {
+  if (END_OPTIONS[state.endFocus] === 'exit-to-lobby') {
+    // Straight back to the lobby, seat and all. The entry module reconciles the
+    // seat against the state, so letting go of the room here is what clears this
+    // player's presence — and a cleared presence flag is the one thing that
+    // reaches the other card as their partner leaving, rather than leaving them
+    // staring at a dead game.
+    return initialState();
+  }
+
+  return acceptRematch(state, newWord);
+}
+
+// Asking for another round. It is an acceptance rather than a start: a rematch
+// one player began alone would drag the other into a round they had not asked
+// for, so this writes a flag and waits.
+function acceptRematch(state, newWord) {
+  if (state.seat === null || state.room.rematch[state.seat]) return state;
+
+  // The flag is written at its own path rather than as a whole rematch object,
+  // for the same reason a guess does not write the presence flags: the other
+  // seat's acceptance belongs to the other client, and this client's copy of it
+  // is only ever as fresh as the last snapshot it saw. Two players accepting at
+  // the same moment is the ordinary case here, not a rare race.
+  const rematch = { ...state.room.rematch, [state.seat]: true };
+
+  return settle(
+    {
+      ...state,
+      room: { ...state.room, rematch },
+      outbox: { [`rematch/${state.seat}`]: true },
+    },
+    newWord,
+  );
+}
+
+// Starts the next round once both players have asked for one. Only seat one
+// writes it: two clients resetting the same room would each publish a word they
+// drew independently, and the players would watch the word they are about to
+// guess change under them. Seat two waits for the reset to arrive, which is the
+// same way it learns about every other change to the room.
+//
+// The word arrives as an argument for the same reason the room's first one does:
+// drawing one at random is the single part of starting a game that cannot be
+// pure, and the reducer decides rather than does.
+function startRematch(state, newWord) {
+  if (state.screen !== 'playing' || gameStatus(state) === 'playing') return state;
+  if (state.seat !== 1 || !state.room.rematch[1] || !state.room.rematch[2]) return state;
+
+  // Everything a round is made of, cleared or replaced together. The presence
+  // flags are the one part of the room left alone — they belong to the two
+  // clients that maintain them, and this client's copy of the other's is only
+  // ever as fresh as the last snapshot it saw.
+  const round = { word: newWord, guessed: [], turn: 1, rematch: { 1: false, 2: false } };
+
+  return { ...state, room: { ...state.room, ...round }, outbox: round, ...freshRound() };
 }
 
 // A guess, which is the only thing in the game that changes the room. It is
@@ -185,8 +285,8 @@ function reduceNotice(state, action) {
 // Everything that depends on both halves of the pairing — which seat this client
 // holds and what the room says — decided in one place. A seat claim and a room
 // snapshot can land in either order, so neither may own the decision alone.
-function settle(state) {
-  return placeCursor(pair(state));
+function settle(state, newWord = null) {
+  return placeCursor(startRematch(pair(state), newWord));
 }
 
 function pair(state) {
@@ -209,17 +309,27 @@ function pair(state) {
 }
 
 function moveLobbyFocus(state, direction) {
-  // Up and down only. Left and right move focus *within* a row everywhere in
-  // this app, and a single column of options has no row to move within, so they
-  // are inert here rather than aliased onto up and down.
-  const step = { up: -1, down: 1 }[direction] ?? 0;
-  if (step === 0) return state;
+  const lobbyFocus = moveFocus(state.lobbyFocus, direction, LOBBY_OPTIONS.length);
+  return lobbyFocus === state.lobbyFocus ? state : { ...state, lobbyFocus };
+}
 
-  // Wrapping. On a two-item list, clamping would make one press of down do
-  // nothing and one press of up do nothing, at opposite ends — which reads as
-  // the app having missed the input.
-  const count = LOBBY_OPTIONS.length;
-  return { ...state, lobbyFocus: (state.lobbyFocus + step + count) % count };
+function moveEndFocus(state, direction) {
+  const endFocus = moveFocus(state.endFocus, direction, END_OPTIONS.length);
+  return endFocus === state.endFocus ? state : { ...state, endFocus };
+}
+
+// Moving around a column of options, wherever on the card one of them is.
+//
+// Up and down only. Left and right move focus *within* a row everywhere in this
+// app, and a column of options has no row to move within, so they are inert on
+// one rather than aliased onto up and down.
+//
+// Wrapping rather than clamping. On a two-item list, clamping would make one
+// press of down do nothing and one press of up do nothing, at opposite ends —
+// which reads as the app having missed the input.
+function moveFocus(focus, direction, count) {
+  const step = { up: -1, down: 1 }[direction] ?? 0;
+  return step === 0 ? focus : (focus + step + count) % count;
 }
 
 // Which option Enter would activate on whichever screen is up. A screen with a
@@ -230,9 +340,29 @@ export function focusedOption(state) {
       return LOBBY_OPTIONS[state.lobbyFocus];
     case 'waiting':
       return 'leave-waiting';
+    case 'playing':
+      // Nothing is focused while the game is on. The keyboard has the card
+      // then, and the options are not on it yet.
+      return isGameOver(state) ? END_OPTIONS[state.endFocus] : null;
     default:
       return null;
   }
+}
+
+// Whether the card belongs to the two options rather than to the keyboard. The
+// renderer asks this rather than comparing statuses itself, so there is one
+// answer to whether the keyboard is still on the card.
+export function isGameOver(state) {
+  return state.screen === 'playing' && gameStatus(state) !== 'playing';
+}
+
+// The line above the two options, for the player who is waiting on the other to
+// answer. Only the player who has accepted sees it: the wait belongs to them,
+// and the other player is being asked for an answer rather than for patience.
+export function rematchNotice(state) {
+  const mine = state.room?.rematch?.[state.seat] === true;
+  const theirs = state.room?.rematch?.[partnerSeat(state.seat)] === true;
+  return mine && !theirs ? WAITING_FOR_PARTNER : '';
 }
 
 // Movement around the keyboard grid. Every edge wraps in both axes, so no
@@ -476,5 +606,12 @@ export function claimSeat(room, newWord = null) {
 }
 
 function occupy(room, seat) {
-  return { ...room, players: { ...room.players, [seat]: { present: true } } };
+  return {
+    ...room,
+    players: { ...room.players, [seat]: { present: true } },
+    // A seat that has just been taken carries no acceptance. Whatever the last
+    // occupant left in it belongs to a rematch they are not here for, and the
+    // player sitting down has agreed to nothing.
+    rematch: { ...room.rematch, [seat]: false },
+  };
 }

@@ -176,6 +176,25 @@
      back, and no key is focused, because a highlighted key on a keyboard that
      will not answer is an invitation to press it. */
   .keyboard--locked { opacity: 0.45; }
+
+  /* What the play card shows in place of the keyboard once the game is over.
+     It takes exactly the keyboard's 242px, so the gallows the players have just
+     filled in does not resize underneath them the moment they want to look at
+     it, and the ending stays where it was on the card. */
+  .endgame {
+    flex: none; width: 100%; height: 242px; margin-top: 12px;
+    display: flex; flex-direction: column; justify-content: center; gap: 14px;
+  }
+  /* Both of these set their own display, so the browser's own rule for a hidden
+     element is not enough to put either of them away. */
+  .keyboard[hidden], .endgame[hidden] { display: none; }
+  /* Why a player who has accepted a rematch is waiting. The line keeps its place
+     whether or not it has anything to say, so agreeing to another round does not
+     shunt the two options up the card underneath the press that did it. */
+  .endgame-notice {
+    flex: none; min-height: 26px; text-align: center;
+    font-size: 22px; line-height: 1.2; color: var(--dim);
+  }
 </style>
 </head>
 <body>
@@ -226,6 +245,14 @@
          to "why did nothing happen when I pressed that". -->
     <p class="status" data-status></p>
     <div class="keyboard" data-keyboard></div>
+    <!-- The end of the game, in the space the keyboard was in: another round, or
+         out. A rematch takes both players, so the line above the options says so
+         to whichever of them is waiting on the other. -->
+    <div class="endgame" data-endgame hidden>
+      <p class="endgame-notice" data-endgame-notice></p>
+      <div class="option" data-option="rematch">Play again</div>
+      <div class="option" data-option="exit-to-lobby">Exit to Lobby</div>
+    </div>
   </main>
 
   <!-- Every dead end the app has, sharing one screen. All of them report

@@ -3,17 +3,18 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**A whole game can be played out, won and lost; there is no way to start a second
-one yet.** Connecting drops you into the single shared room and waits, a second
-player arriving starts the game on both cards, and from there the two alternate:
-the player whose turn it is guesses a letter with Enter, every occurrence of it
-appears on both cards at once, and the turn passes whether the guess was right or
-wrong. The other card's keyboard is locked while it waits. Every wrong guess
-draws one more part of the gallows on both cards, and the game ends the same way
-on both — YOU WIN when the last letter is revealed, YOU LOSE and the word given
-up when the sixth wrong guess completes the figure. What there is no way to do
-yet is play again: a finished card holds its ending, and the rematch comes next.
-The connectivity probe that proved the design possible has moved to
+**The whole loop works: lobby, pair, play, end, repeat.** Connecting drops you
+into the single shared room and waits, a second player arriving starts the game
+on both cards, and from there the two alternate: the player whose turn it is
+guesses a letter with Enter, every occurrence of it appears on both cards at
+once, and the turn passes whether the guess was right or wrong. The other card's
+keyboard is locked while it waits. Every wrong guess draws one more part of the
+gallows on both cards, and the game ends the same way on both — YOU WIN when the
+last letter is revealed, YOU LOSE and the word given up when the sixth wrong
+guess completes the figure. The end of a game puts two options where the keyboard
+was: another round, which begins only once both players have asked for one, or
+out to the lobby, which releases your partner rather than leaving them staring at
+a dead game. The connectivity probe that proved the design possible has moved to
 `scripts/probe.html` and still runs.
 
 ## Layout
@@ -131,8 +132,59 @@ clients come to disagree about how a game finished.
 The ending appears in the line the turn was in, because a game that has ended has
 no next player, and both keyboards go dead the moment it does. There is nothing
 left to guess, and a cursor moving around a keyboard that will not answer is an
-invitation to press it. A finished card stays where it is; playing again is the
-next ticket.
+invitation to press it. The keyboard goes with the turn: the card hands its
+bottom half to the two options below.
+
+## Playing again
+
+The end of a game puts two options where the keyboard was — **Play again** and
+**Exit to Lobby** — because there is nothing left to guess and the options want
+the room the keys were taking up. The block is exactly the keyboard's height, so
+the gallows the players have just filled in does not resize underneath them at
+the moment they want to look at it.
+
+A rematch takes both players. Pressing Play again is an acceptance rather than a
+start: one player alone must not be able to drag the other into a round they did
+not ask for. Each client writes its own flag, at the path `rematch/<seat>` rather
+than as a whole `rematch` object, for the same reason a guess never writes the
+presence flags — the other seat's acceptance belongs to the other client, and
+this client's copy of it is only ever as fresh as the last snapshot it saw. Two
+players accepting at the same moment is the ordinary case here, not a rare race.
+
+Whichever of them accepts first is told they are waiting on their partner, so the
+pause is explained rather than mysterious. That line keeps its place on the card
+whether or not it has anything to say, so agreeing to another round does not
+shunt the two options upwards underneath the press that did it.
+
+Once both flags are set the room is reset in one write: a new word, an empty
+guess list, the turn back to player one, and both acceptances cleared. Only seat
+one writes it. Two clients resetting the same room would each publish a word they
+had drawn independently, and the players would watch the word they were about to
+guess change under them. Seat two waits for the reset to arrive, which is the
+same way it learns about every other change to the room.
+
+The cursor and which of the two options is focused are put back as well. Neither
+of them is in the room — they are places on a card rather than facts about the
+game — so nothing in a snapshot can restore them. The client that did not write
+the reset recognises a new round by the guess list having got shorter, which is
+the whole of the test: guesses only ever accumulate within a round, so nothing
+else can take any away.
+
+Exit to Lobby drops the seat along with everything else, and needs no special
+path out to do it: the entry module reconciles the seat against the state rather
+than releasing it at particular transitions, so the presence flag simply goes —
+and a presence flag going is exactly what reaches the other card as PARTNER LEFT.
+One player is back in the lobby and the other is released.
+
+A player who exits leaves their acceptance behind them, in a room somebody else
+may walk into, so taking a seat clears that seat's flag. Whatever the last
+occupant left in it belongs to a rematch they are not here for.
+
+The word a rematch is played with reaches the reducer as an argument on the
+action, for the same reason the room's first word is an argument to `claimSeat`:
+drawing one at random is the single part of starting a game that cannot be pure,
+and the reducer decides rather than does. Every action carries a freshly drawn
+word and almost every one of them throws it away, which costs an array index.
 
 ## The keyboard
 
@@ -168,7 +220,10 @@ a 36px status line and a 254px keyboard, which leaves 195px for the gallows. The
 gallows is the only part of the card that can be drawn to whatever it is given,
 which is why the status line came out of its share and not out of the word or the
 keys — and why the ending, which lands in that same line at a larger size, is
-sized to fit the 36px it already had rather than taking more.
+sized to fit the 36px it already had rather than taking more. The two options
+that replace the keyboard take its 254px exactly rather than a height of their
+own, so the gallows is drawn to the same size whether the game is running or
+over.
 
 ## Running it
 
@@ -212,6 +267,16 @@ The endings are tested at their boundaries — one letter short of the word and
 the letter that finishes it, five wrong guesses and the sixth — and on the
 property the whole design rests on: that two clients holding the same room derive
 the same status, the same word and the same line under it.
+
+The rematch is tested as the handshake it is: that one acceptance starts nothing,
+that the player who gave it is told they are waiting, that the round begins only
+when the second one arrives, and that it begins the same way whichever player
+accepted last. A room reset is tested for what it clears as much as for what it
+sets — the guesses, the turn, both flags, the cursor and which option is focused
+— and three rounds are played out through one pairing to hold it to that more
+than once. The outbox is asserted on directly, because writing a whole `rematch`
+object rather than one path is the kind of mistake that only shows up as two
+players accepting at the same moment.
 
 The word list is tested too, but on its invariants rather than its contents:
 uppercase A to Z, five to eight letters, no duplicates. A word that broke one of

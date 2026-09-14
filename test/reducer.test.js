@@ -10,6 +10,7 @@ import {
   PARTNER_LEFT,
   PARTNER_TURN,
   ROOM_BUSY,
+  WAITING_FOR_PARTNER,
   YOUR_TURN,
   YOU_LOSE,
   YOU_WIN,
@@ -19,10 +20,12 @@ import {
   gameStatus,
   guessedLetters,
   initialState,
+  isGameOver,
   isMyTurn,
   maskedWord,
   normalizeRoom,
   reduce,
+  rematchNotice,
   statusNotice,
   wantsRoom,
   wrongGuesses,
@@ -37,10 +40,15 @@ import {
 // tests and nothing standing in for one, because the reducer never sees one.
 
 const move = (direction) => ({ type: 'move', direction });
-const activate = () => ({ type: 'activate' });
 const joined = (seat) => ({ type: 'joined', seat });
-const hydrate = (room) => ({ type: 'hydrate', room });
 const dismissNotice = () => ({ type: 'dismissNotice' });
+
+// Every action carries a freshly drawn word, exactly as the entry module hands
+// one to the reducer, because any transition may turn out to be the one that
+// starts another round. Named here rather than random, so a test can say which
+// word the next round is played with.
+const activate = (newWord = 'MARBLE') => ({ type: 'activate', newWord });
+const hydrate = (room, newWord = 'MARBLE') => ({ type: 'hydrate', room, newWord });
 
 // A room as the database would hold it once the named seats are occupied.
 const roomWith = (...seats) => ({
@@ -50,10 +58,24 @@ const roomWith = (...seats) => ({
 // The same, once the room creator has published a word into it.
 const gameOf = (word, guessed = [], turn = 1) => ({ word, guessed, turn, ...roomWith(1, 2) });
 
-// The room as the database holds it once a player's client has published their
-// guess: the fields in that client's outbox, written over the room both players
-// share. Hydrating the other player with this is what the network does.
-const published = (state) => ({ ...state.room, ...state.outbox });
+// The room as the database holds it once a player's client has published: the
+// fields in that client's outbox, written over the room both players share.
+// Hydrating the other player with this is what the network does.
+//
+// An outbox key may be a path. `db.update` treats `rematch/1` as a write to that
+// one nested key and leaves everything beside it alone, which is how a client
+// writes its own flag without carrying a stale copy of its partner's.
+const published = (state) => {
+  const room = structuredClone(state.room);
+  for (const [path, value] of Object.entries(state.outbox ?? {})) {
+    const keys = path.split('/');
+    const leaf = keys.pop();
+    let node = room;
+    for (const key of keys) node = node[key] ??= {};
+    node[leaf] = value;
+  }
+  return room;
+};
 
 // Deep-frozen before every dispatch, so a reducer that mutates its input throws
 // instead of quietly passing. ES modules are strict mode, so the throw is real.
@@ -713,24 +735,305 @@ test('the ending is not written to the room', () => {
 });
 
 test('the keyboard is dead once the game is over', () => {
-  // Both cards, whoever is nominally to move. There is nothing left to guess and
-  // a cursor moving around a keyboard that will not answer invites a press.
+  // Both cards, whoever is nominally to move. There is nothing left to guess, and
+  // the presses that moved the cursor around belong to the two options by then.
   for (const guessed of [[...'PLANET'], ['B', 'C', 'D', 'F', 'G', 'H']]) {
     const over = gameFor(1, { guessed, turn: 1 });
 
     assert.equal(isMyTurn(over), false);
-    assert.equal(play([move('down'), move('right')], over), over);
-    assert.equal(play([activate()], over), over);
+    assert.equal(focusedLetter(play([move('down'), move('right')], over)), focusedLetter(over));
+    assert.deepEqual(guessedLetters(play([activate()], over)), guessed);
   }
 });
 
 test('a game over on one card is over on the other as well', () => {
   const lost = play([hydrate(gameOf('PLANET', ['B', 'C', 'D', 'F', 'G', 'H'], 2))], seated(2));
+
   assert.equal(isMyTurn(lost), false);
-  assert.equal(play([activate()], lost), lost);
+  assert.equal(gameStatus(play([activate()], lost)), 'lost');
 });
 
 test('there is no ending before a room has arrived', () => {
   assert.equal(gameStatus(play([])), 'playing');
   assert.equal(gameStatus(play([activate()])), 'playing');
+});
+
+// --- playing again ---------------------------------------------------------
+
+// A room in which the named seats have asked for another round. The flags live
+// beside the word and the guesses because they are a fact about the room both
+// players share, not about either client.
+const withRematch = (room, ...seats) => ({
+  ...room,
+  rematch: { 1: seats.includes(1), 2: seats.includes(2) },
+});
+
+// A finished game — the word fully revealed — seen from the seat named, with
+// whichever players have already accepted marked as having done so. Every test
+// below starts here: the two options are only on the card once the game is over.
+const ended = (seat, ...accepted) =>
+  play([hydrate(withRematch(gameOf('PLANET', [...'PLANET'], 1), ...accepted))], seated(seat));
+
+// The two presses the end of a game understands. Focus opens on Play again, so
+// leaving is one press further down.
+const acceptRematch = (state, word) => play([activate(word)], state);
+const exitToLobby = (state) => play([move('down'), activate()], state);
+
+test('a finished game puts the two options on the card in place of the keyboard', () => {
+  const over = ended(1);
+
+  assert.equal(isGameOver(over), true);
+  assert.equal(focusedOption(over), 'rematch');
+});
+
+test('both players are offered the same two options', () => {
+  assert.equal(isGameOver(ended(2)), true);
+  assert.equal(focusedOption(ended(2)), focusedOption(ended(1)));
+});
+
+test('the keyboard keeps the card for as long as the game is running', () => {
+  assert.equal(isGameOver(gameFor(1)), false);
+  assert.equal(focusedOption(gameFor(1)), null);
+});
+
+test('down and up move between the two options and wrap at both ends', () => {
+  assert.equal(focusedOption(play([move('down')], ended(1))), 'exit-to-lobby');
+  assert.equal(focusedOption(play([move('down'), move('down')], ended(1))), 'rematch');
+  assert.equal(focusedOption(play([move('up')], ended(1))), 'exit-to-lobby');
+});
+
+test('left and right do nothing once the game is over', () => {
+  const over = ended(1);
+  assert.equal(play([move('left'), move('right')], over), over);
+});
+
+test('moving between the options publishes nothing', () => {
+  assert.equal(play([move('down'), move('up')], ended(1)).outbox, null);
+});
+
+test('accepting a rematch publishes only this player’s own flag', () => {
+  // The other seat's acceptance belongs to the other client, for the same reason
+  // its presence flag does: this client's copy of it is only ever as fresh as the
+  // last snapshot it saw.
+  assert.deepEqual(acceptRematch(ended(2)).outbox, { 'rematch/2': true });
+});
+
+test('accepting a rematch alone does not start one', () => {
+  const alone = acceptRematch(ended(1));
+
+  assert.equal(isGameOver(alone), true);
+  assert.equal(alone.room.word, 'PLANET');
+  assert.deepEqual(guessedLetters(alone), [...'PLANET']);
+});
+
+test('a player who has accepted is shown they are waiting on their partner', () => {
+  assert.equal(rematchNotice(acceptRematch(ended(1))), WAITING_FOR_PARTNER);
+});
+
+test('a player who has not accepted is shown nothing', () => {
+  assert.equal(rematchNotice(ended(1)), '');
+});
+
+test('a player whose partner has accepted is shown nothing either', () => {
+  // The wait belongs to whoever accepted. The other player is being asked for an
+  // answer, not for patience.
+  assert.equal(rematchNotice(ended(1, 2)), '');
+});
+
+test('the waiting line is gone once the round has started', () => {
+  assert.equal(rematchNotice(acceptRematch(ended(1, 2))), '');
+});
+
+test('a rematch begins only once both players have accepted', () => {
+  const both = acceptRematch(ended(1, 2));
+
+  assert.equal(isGameOver(both), false);
+  assert.equal(gameStatus(both), 'playing');
+  assert.equal(both.room.word, 'MARBLE');
+});
+
+test('a rematch is played with a new word', () => {
+  assert.equal(acceptRematch(ended(1, 2), 'CASTLE').room.word, 'CASTLE');
+});
+
+test('a rematch clears the round that came before it entirely', () => {
+  const next = acceptRematch(ended(1, 2));
+
+  assert.deepEqual(guessedLetters(next), []);
+  assert.equal(wrongGuesses(next), 0);
+  assert.equal(maskedWord(next), '------');
+  assert.equal(next.room.turn, 1);
+  assert.equal(focusedLetter(next), 'A');
+  assert.equal(statusNotice(next), YOUR_TURN);
+});
+
+test('the acceptance flags are cleared when the new round starts', () => {
+  const next = acceptRematch(ended(1, 2));
+
+  assert.deepEqual(next.room.rematch, { 1: false, 2: false });
+  assert.deepEqual(next.outbox.rematch, { 1: false, 2: false });
+});
+
+test('the new round is published without touching the presence flags', () => {
+  const next = acceptRematch(ended(1, 2));
+
+  assert.deepEqual(next.outbox, {
+    word: 'MARBLE',
+    guessed: [],
+    turn: 1,
+    rematch: { 1: false, 2: false },
+  });
+  assert.equal('players' in next.outbox, false);
+});
+
+test('the room is reset by seat one, whichever player accepted last', () => {
+  // Two clients resetting the same room would each publish a word they drew
+  // independently, and the players would watch the word change under them.
+  const second = acceptRematch(ended(2, 1));
+
+  assert.equal(isGameOver(second), true);
+  assert.deepEqual(second.outbox, { 'rematch/2': true });
+});
+
+test('seat one starts the round when the second acceptance reaches it', () => {
+  const waiting = acceptRematch(ended(1));
+  const started = play([hydrate(withRematch(published(waiting), 1, 2))], waiting);
+
+  assert.equal(gameStatus(started), 'playing');
+  assert.equal(started.room.word, 'MARBLE');
+});
+
+test('the new round reaches the other player as an ordinary room change', () => {
+  const started = acceptRematch(ended(1, 2));
+  const partner = play([hydrate(published(started))], ended(2, 1, 2));
+
+  assert.equal(gameStatus(partner), 'playing');
+  assert.equal(maskedWord(partner), '------');
+  assert.equal(focusedOption(partner), null);
+  assert.equal(isMyTurn(partner), false);
+});
+
+test('a rematch cannot start while the game is still running', () => {
+  // Nothing in the app puts both flags on a live game, but a room can hold any
+  // pair of values, and a reset here would take the word out from under two
+  // players in the middle of guessing it.
+  const live = play([hydrate(withRematch(gameOf('PLANET', ['P'], 1), 1, 2))], seated(1));
+
+  assert.equal(live.room.word, 'PLANET');
+  assert.equal(live.outbox, null);
+});
+
+test('pressing Play again twice changes nothing', () => {
+  const accepted = acceptRematch(ended(1));
+  assert.equal(play([activate()], accepted), accepted);
+});
+
+// Plays one letter for whichever of the two clients is to move, and hands the
+// guess to the other as the room the network would carry between them.
+function guessBetween(pair, letter) {
+  const oneMoves = isMyTurn(pair[0]);
+  const [mover, other] = oneMoves ? pair : [pair[1], pair[0]];
+
+  const played = guess(mover, letter);
+  const caught = play([hydrate(published(played))], other);
+  return oneMoves ? [played, caught] : [caught, played];
+}
+
+// Six wrong guesses between the two of them, which is the shortest ending that
+// does not depend on which word the round was played with. None of these letters
+// is in any of the words these tests use.
+const loseRound = (pair) => ['Q', 'J', 'X', 'Z', 'V', 'W'].reduce(guessBetween, pair);
+
+test('several rematches in a row leave the room no worse than the first', () => {
+  let one = gameFor(1, { word: 'BEACH' });
+  let two = play([hydrate(gameOf('BEACH', [], 1))], seated(2));
+
+  for (const word of ['MARBLE', 'CASTLE', 'GUITAR']) {
+    [one, two] = loseRound([one, two]);
+    assert.equal(gameStatus(one), 'lost');
+    assert.equal(gameStatus(two), 'lost');
+
+    // Seat two accepts first, so every round here is started by that acceptance
+    // reaching seat one — the longer of the two paths through the handshake. The
+    // wander over the options on the way is there to leave focus somewhere the
+    // next round has to put back.
+    two = play([move('down'), move('up'), activate(word)], two);
+    one = play([hydrate(published(two)), activate(word)], one);
+    two = play([hydrate(published(one))], two);
+
+    for (const player of [one, two]) {
+      assert.equal(gameStatus(player), 'playing');
+      assert.equal(player.room.word, word);
+      assert.deepEqual(guessedLetters(player), []);
+      assert.deepEqual(player.room.rematch, { 1: false, 2: false });
+      assert.equal(focusedLetter(player), 'A');
+      assert.equal(player.room.players[1].present, true);
+      assert.equal(player.room.players[2].present, true);
+    }
+    assert.equal(isMyTurn(one), true);
+    assert.equal(isMyTurn(two), false);
+  }
+});
+
+test('the options open on Play again again in every later round', () => {
+  // Focus is this client's own, so nothing in the room can put it back. A player
+  // who left it on Exit last time must not find it there when the next round
+  // ends.
+  let one = gameFor(1, { word: 'BEACH' });
+  let two = play([hydrate(gameOf('BEACH', [], 1))], seated(2));
+
+  [one, two] = loseRound([one, two]);
+  // Accept, then wander onto Exit while waiting on the other player. That is the
+  // only way focus is anywhere but Play again when the next round arrives —
+  // pressing Enter on Exit is what leaving is.
+  two = play([activate('CASTLE'), move('down')], two);
+  one = play([hydrate(published(two)), activate('CASTLE')], one);
+  two = play([hydrate(published(one))], two);
+
+  [one, two] = loseRound([one, two]);
+  assert.equal(focusedOption(two), 'rematch');
+});
+
+test('Exit to Lobby returns that player to the lobby', () => {
+  const left = exitToLobby(ended(1));
+
+  assert.equal(left.screen, 'lobby');
+  assert.deepEqual(left, initialState());
+});
+
+test('Exit to Lobby gives up the seat, which is what releases the partner', () => {
+  // The entry module reconciles the seat against wantsRoom, so dropping it here
+  // is what clears this player's presence — and a cleared presence flag is the
+  // one thing that reaches the other card as their partner going.
+  const left = exitToLobby(ended(1, 1));
+
+  assert.equal(wantsRoom(left), false);
+  assert.equal(left.seat, null);
+
+  const partner = play(
+    [hydrate({ word: 'PLANET', guessed: [...'PLANET'], turn: 1, ...roomWith(2) })],
+    ended(2, 1),
+  );
+
+  assert.equal(partner.screen, 'notice');
+  assert.equal(partner.notice, PARTNER_LEFT);
+  assert.equal(wantsRoom(partner), false);
+});
+
+test('a player who has accepted a rematch can still leave', () => {
+  assert.deepEqual(exitToLobby(acceptRematch(ended(2))), initialState());
+});
+
+test('a seat carries no acceptance from whoever sat in it last', () => {
+  // A player who exits leaves their flag behind them in a room somebody else may
+  // walk into. The next occupant of that seat has agreed to nothing.
+  const abandoned = {
+    word: 'MARBLE',
+    guessed: ['M'],
+    turn: 1,
+    rematch: { 1: true, 2: false },
+    ...roomWith(2),
+  };
+
+  assert.deepEqual(claimSeat(abandoned, 'PLANET').room.rematch, { 1: false, 2: false });
 });
