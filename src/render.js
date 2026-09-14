@@ -7,13 +7,14 @@
 
 import {
   LETTERS,
-  YOUR_TURN,
   focusedLetter,
   focusedOption,
+  gameStatus,
   guessedLetters,
   isMyTurn,
   maskedWord,
-  turnNotice,
+  statusNotice,
+  wrongGuesses,
 } from './reducer.js';
 
 const screens = new Map(
@@ -24,8 +25,13 @@ const options = new Map(
 );
 const noticeHeadline = document.querySelector('[data-notice-headline]');
 const word = document.querySelector('[data-word]');
-const turn = document.querySelector('[data-turn]');
+const status = document.querySelector('[data-status]');
 const keyboard = document.querySelector('[data-keyboard]');
+
+// The six body parts, in the order the markup draws them: head, body, arms,
+// legs. Document order is draw order, so how many to show is the whole of what
+// this has to know.
+const parts = [...document.querySelectorAll('[data-part]')];
 
 // The keys are written in from the alphabet the reducer owns rather than spelled
 // out in the markup, so the grid cannot come to hold a different set of letters
@@ -51,12 +57,22 @@ export function render(state) {
 
   word.textContent = maskedWord(state);
 
-  const mine = isMyTurn(state);
-  turn.textContent = turnNotice(state);
-  turn.classList.toggle('turn--mine', turn.textContent === YOUR_TURN);
+  // One more part for every wrong guess, so the danger is read off the figure
+  // rather than counted off the keyboard. A count past six leaves the figure
+  // complete, which is all there is to draw.
+  const wrong = wrongGuesses(state);
+  parts.forEach((node, index) => node.classList.toggle('gallows-part--drawn', index < wrong));
 
-  // No focused key on the other player's turn. The keyboard does not answer a
-  // press then, and a highlighted key is what invites one.
+  const outcome = gameStatus(state);
+  const mine = isMyTurn(state);
+  status.textContent = statusNotice(state);
+  status.classList.toggle('status--mine', mine);
+  status.classList.toggle('status--won', outcome === 'won');
+  status.classList.toggle('status--lost', outcome === 'lost');
+
+  // No focused key while this card cannot guess — the other player's turn, or a
+  // game that has finished. The keyboard does not answer a press then, and a
+  // highlighted key is what invites one.
   keyboard.classList.toggle('keyboard--locked', !mine);
 
   const guessed = guessedLetters(state);

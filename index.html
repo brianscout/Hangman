@@ -105,19 +105,45 @@
      The vertical padding is tighter than the other screens', which have one
      thing on them and can afford to be generous. */
   .screen--play { padding: 24px 48px; justify-content: flex-start; }
-  .gallows { flex: 1 1 auto; width: 100%; min-height: 0; }
+
+  /* Inline SVG rather than an image: it stays sharp at whatever height the
+     layout gives it, needs no hosting on a platform that refetches the page
+     every launch, and costs almost nothing in page weight. It is drawn to the
+     space that is left rather than to a fixed size — the only part of the card
+     that can be. */
+  .gallows {
+    flex: 1 1 auto; width: 100%; min-height: 0; display: block;
+    fill: none; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round;
+  }
+  /* The frame is context and the figure is the signal, so the frame sits one
+     step back. Both are shapes rather than colours: what a player reads off this
+     is how many parts are drawn, which survives a waveguide washing every
+     mid-tone out. */
+  .gallows-frame { stroke: var(--dim); }
+  .gallows-part { stroke: var(--content); display: none; }
+  .gallows-part--drawn { display: inline; }
 
   /* Whose turn it is. Small, because it is a status line rather than a thing to
      look at, and the word above it is what the player is reading. The two states
      differ in their words as well as their colour: an additive waveguide washes
      mid-tones out, so a hue on its own is not a signal in a bright room. */
-  .turn {
+  .status {
     flex: none; margin-top: 12px;
     font-size: 22px; font-weight: 600; line-height: 1.1;
     letter-spacing: 0.1em; text-indent: 0.1em;
     color: var(--dim);
   }
-  .turn--mine { color: var(--focus); }
+  .status--mine { color: var(--focus); }
+  /* How the game finished, in the place the turn was, because a game that has
+     ended has no next player. Bigger than a status line and no bigger than the
+     36px this row is budgeted at, so the gallows the players have just filled in
+     does not shrink underneath the moment they want to look at it. The two
+     endings differ in their words before their colour. */
+  .status--won, .status--lost {
+    font-size: 30px; font-weight: 700; letter-spacing: 0.14em; text-indent: 0.14em;
+  }
+  .status--won { color: var(--focus); }
+  .status--lost { color: var(--content); }
 
   /* Six columns and five rows, which is where 26 letters land: the last row
      holds only Y and Z, and starts at the left edge with the rest. */
@@ -146,9 +172,9 @@
      so the grid the cursor moves around is the set of keys that still do
      something. The cursor never stops on one of these. */
   .key--guessed { border-color: transparent; color: var(--spent); }
-  /* The other player's turn. The whole keyboard goes back, and no key is
-     focused, because a highlighted key on a keyboard that will not answer is an
-     invitation to press it. */
+  /* The other player's turn, or a game that has ended. The whole keyboard goes
+     back, and no key is focused, because a highlighted key on a keyboard that
+     will not answer is an invitation to press it. */
   .keyboard--locked { opacity: 0.45; }
 </style>
 </head>
@@ -176,14 +202,29 @@
        what we have got so far, and what we can press. The keys themselves are
        written in by the renderer from the one alphabet the reducer owns. -->
   <main class="screen screen--play" id="screen-playing" hidden>
-    <!-- The gallows arrives with a later ticket. The space it needs is claimed
-         now, so the card is settled at one screenful with the keyboard on it
-         rather than being re-budgeted once there is something to draw here. -->
-    <div class="gallows"></div>
+    <!-- Seven states, from the empty gallows through six body parts, one per
+         wrong guess. The frame is always there; the renderer reveals the parts
+         in the order they are written, so document order is the order the
+         figure is drawn in. -->
+    <svg class="gallows" viewBox="0 0 160 200" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <g class="gallows-frame">
+        <path d="M 6 195 H 94"></path>
+        <path d="M 40 195 V 12"></path>
+        <path d="M 40 12 H 125"></path>
+        <path d="M 125 12 V 38"></path>
+      </g>
+      <circle class="gallows-part" data-part cx="125" cy="55" r="17"></circle>
+      <path class="gallows-part" data-part d="M 125 72 V 132"></path>
+      <path class="gallows-part" data-part d="M 125 88 L 98 113"></path>
+      <path class="gallows-part" data-part d="M 125 88 L 152 113"></path>
+      <path class="gallows-part" data-part d="M 125 132 L 100 168"></path>
+      <path class="gallows-part" data-part d="M 125 132 L 150 168"></path>
+    </svg>
     <p class="word" data-word></p>
-    <!-- Whose turn it is, directly above the keyboard it governs, because it is
-         the answer to "why did nothing happen when I pressed that". -->
-    <p class="turn" data-turn></p>
+    <!-- Whose turn it is while the game is on and how it finished once it is
+         over, directly above the keyboard it governs, because it is the answer
+         to "why did nothing happen when I pressed that". -->
+    <p class="status" data-status></p>
     <div class="keyboard" data-keyboard></div>
   </main>
 

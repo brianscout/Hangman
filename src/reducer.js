@@ -42,6 +42,20 @@ export const NO_CONNECTION = 'NO CONNECTION';
 export const YOUR_TURN = 'YOUR TURN';
 export const PARTNER_TURN = "PARTNER'S TURN";
 
+// The end of the game, in the same place on the card as the turn it replaces.
+// Both players are always told the same one of these: there is one word, one
+// gallows and one result, and the result is shared whichever of them brought it
+// about.
+export const YOU_WIN = 'YOU WIN';
+export const YOU_LOSE = 'YOU LOSE';
+
+// Head, body, two arms, two legs. Six wrong guesses complete the figure, which
+// is what makes the gallows readable as how much danger the players are in
+// without anyone counting anything. The six parts are drawn in the markup, so
+// this number and the number of parts in `index.html` are the same number in two
+// places — the card runs out of figure at exactly the guess this loses on.
+export const MAX_WRONG = 6;
+
 export function initialState() {
   // The keyboard cursor is local to this client and is never published to the
   // room. Publishing it would mean a database write on every cursor move, and
@@ -319,6 +333,11 @@ export function maskedWord(state) {
   const word = state.room?.word ?? null;
   if (word === null) return '';
 
+  // A lost game gives the word up. The players have earned finding out what they
+  // were missing, and a row of dashes is the one ending nobody learns anything
+  // from.
+  if (gameStatus(state) === 'lost') return word;
+
   // Every occurrence of a guessed letter is revealed, not just the first. A
   // player who guesses A in BANANA has earned all three of them.
   return [...word].map((letter) => (state.room.guessed.includes(letter) ? letter : DASH)).join('');
@@ -331,12 +350,10 @@ export function guessedLetters(state) {
   return state.room?.guessed ?? [];
 }
 
-// How much danger the players are in. Derived from the word and the guesses for
-// the same reason the masked word is: a stored count is a second opinion about a
-// game that must look identical on both cards.
-//
-// Nothing draws this yet. It is counted from here so that the gallows, when it
-// arrives, has nothing to work out for itself.
+// How much danger the players are in, and how many parts of the gallows are
+// drawn. Derived from the word and the guesses for the same reason the masked
+// word is: a stored count is a second opinion about a game that must look
+// identical on both cards.
 export function wrongGuesses(state) {
   const word = state.room?.word ?? null;
   if (word === null) return 0;
@@ -344,16 +361,59 @@ export function wrongGuesses(state) {
   return guessedLetters(state).filter((letter) => !word.includes(letter)).length;
 }
 
-// Whether this client may guess. Every press the play card understands asks this
-// first, so there is one answer to it rather than one per key.
-export function isMyTurn(state) {
-  return state.seat !== null && state.room !== null && state.room.turn === state.seat;
+// How the game finished, or that it has not. Derived from the word and the guess
+// list and written nowhere: a stored outcome is exactly how two clients come to
+// disagree about what happened, and this is a game whose whole point is that
+// both players are looking at the same thing.
+//
+// A completed word is asked about first. The two endings cannot both be true of
+// a game that was played out — a wrong guess is what completes the gallows and
+// it cannot be what completes the word — but a room can hold any pair of values,
+// and both cards must read the same one out of it whatever is in there.
+export function gameStatus(state) {
+  const word = state.room?.word ?? null;
+  if (word === null) return 'playing';
+
+  const guessed = guessedLetters(state);
+  // Every distinct letter, however many places it holds: BANANA is won on three
+  // guesses, because what the players are reading is the word, not a tally.
+  if ([...word].every((letter) => guessed.includes(letter))) return 'won';
+
+  if (wrongGuesses(state) >= MAX_WRONG) return 'lost';
+  return 'playing';
 }
 
-// What the card says about whose turn it is, which is the only line on the play
-// screen that reads differently on the two glasses.
-export function turnNotice(state) {
-  return isMyTurn(state) ? YOUR_TURN : PARTNER_TURN;
+// Whether this client may guess. Every press the play card understands asks this
+// first, so there is one answer to it rather than one per key.
+//
+// A finished game belongs to nobody. Both keyboards go dead the moment the word
+// is out or the gallows is full, rather than the card offering the last player a
+// turn at a game that is over.
+export function isMyTurn(state) {
+  return (
+    state.seat !== null &&
+    state.room !== null &&
+    state.room.turn === state.seat &&
+    gameStatus(state) === 'playing'
+  );
+}
+
+// The one line under the word: whose turn it is while the game is on, and how it
+// finished once it is over. One line and one function, because the two never
+// want saying at once — a game that has ended has no next player.
+//
+// The turn half is the only thing on the play screen that reads differently on
+// the two glasses. The ending half is the opposite: it is the same on both, by
+// construction, because it is derived from the room they share.
+export function statusNotice(state) {
+  switch (gameStatus(state)) {
+    case 'won':
+      return YOU_WIN;
+    case 'lost':
+      return YOU_LOSE;
+    default:
+      return isMyTurn(state) ? YOUR_TURN : PARTNER_TURN;
+  }
 }
 
 // Whether this state wants a live seat in the room. The entry module reconciles

@@ -5,21 +5,25 @@ import {
   KEYBOARD_COLUMNS,
   LETTERS,
   LOBBY_OPTIONS,
+  MAX_WRONG,
   NO_CONNECTION,
   PARTNER_LEFT,
   PARTNER_TURN,
   ROOM_BUSY,
   YOUR_TURN,
+  YOU_LOSE,
+  YOU_WIN,
   claimSeat,
   focusedLetter,
   focusedOption,
+  gameStatus,
   guessedLetters,
   initialState,
   isMyTurn,
   maskedWord,
   normalizeRoom,
   reduce,
-  turnNotice,
+  statusNotice,
   wantsRoom,
   wrongGuesses,
 } from '../src/reducer.js';
@@ -550,10 +554,10 @@ test('the keyboard is inert when it is not this player’s turn', () => {
 });
 
 test('the card says whose turn it is', () => {
-  assert.equal(turnNotice(gameFor(1, { turn: 1 })), YOUR_TURN);
-  assert.equal(turnNotice(gameFor(1, { turn: 2 })), PARTNER_TURN);
-  assert.equal(turnNotice(gameFor(2, { turn: 2 })), YOUR_TURN);
-  assert.equal(turnNotice(gameFor(2, { turn: 1 })), PARTNER_TURN);
+  assert.equal(statusNotice(gameFor(1, { turn: 1 })), YOUR_TURN);
+  assert.equal(statusNotice(gameFor(1, { turn: 2 })), PARTNER_TURN);
+  assert.equal(statusNotice(gameFor(2, { turn: 2 })), YOUR_TURN);
+  assert.equal(statusNotice(gameFor(2, { turn: 1 })), PARTNER_TURN);
 });
 
 test('the wrong-guess count advances only on wrong guesses', () => {
@@ -609,4 +613,124 @@ test('the cursor steps off a letter the other player has just guessed', () => {
 
   assert.equal(focusedLetter(waiting), 'A');
   assert.equal(focusedLetter(guessed), 'B');
+});
+
+// --- winning and losing ----------------------------------------------------
+
+test('a word with every letter guessed is won', () => {
+  assert.equal(gameStatus(gameFor(1, { guessed: [...'PLANET'] })), 'won');
+});
+
+test('one letter short of the word is still a game', () => {
+  assert.equal(gameStatus(gameFor(1, { guessed: [...'PLANE'] })), 'playing');
+});
+
+test('revealing the final letter wins the game', () => {
+  assert.equal(gameStatus(guess(gameFor(1, { guessed: [...'PLANE'] }), 'T')), 'won');
+});
+
+test('a repeated letter is guessed once and counts for all of its places', () => {
+  // BANANA is won on three letters, not six. A win asks whether the word is
+  // fully revealed, which is what the players are looking at, rather than
+  // counting how many letters have been guessed.
+  const won = guess(gameFor(1, { word: 'BANANA', guessed: ['B', 'A'] }), 'N');
+  assert.equal(gameStatus(won), 'won');
+  assert.equal(maskedWord(won), 'BANANA');
+});
+
+test('five wrong guesses is not yet a loss', () => {
+  const nearly = gameFor(1, { guessed: ['B', 'C', 'D', 'F', 'G'] });
+  assert.equal(wrongGuesses(nearly), 5);
+  assert.equal(gameStatus(nearly), 'playing');
+});
+
+test('the sixth wrong guess loses the game', () => {
+  const lost = guess(gameFor(1, { guessed: ['B', 'C', 'F', 'G', 'H'] }), 'D');
+  assert.equal(wrongGuesses(lost), MAX_WRONG);
+  assert.equal(gameStatus(lost), 'lost');
+});
+
+test('the gallows has one part for every wrong guess and no more than six', () => {
+  assert.equal(MAX_WRONG, 6);
+  assert.equal(wrongGuesses(gameFor(1, { guessed: ['B', 'P', 'C'] })), 2);
+});
+
+test('right guesses never lose the game however many there are', () => {
+  const long = gameFor(1, { word: 'MOUNTAIN', guessed: [...'MOUNTA'] });
+  assert.equal(gameStatus(long), 'playing');
+  assert.equal(wrongGuesses(long), 0);
+});
+
+test('a loss reveals the whole word', () => {
+  // The players have earned finding out what they were missing.
+  const lost = gameFor(1, { guessed: ['B', 'C', 'D', 'F', 'G', 'H'] });
+  assert.equal(maskedWord(lost), 'PLANET');
+});
+
+test('a game still running reveals only what has been guessed', () => {
+  assert.equal(maskedWord(gameFor(1, { guessed: ['B', 'C', 'D', 'F', 'G', 'P'] })), 'P-----');
+});
+
+test('the card says YOU WIN and YOU LOSE', () => {
+  assert.equal(statusNotice(gameFor(1, { guessed: [...'PLANET'] })), YOU_WIN);
+  assert.equal(statusNotice(gameFor(1, { guessed: ['B', 'C', 'D', 'F', 'G', 'H'] })), YOU_LOSE);
+});
+
+test('both players are given the same ending', () => {
+  // The whole reason the outcome is derived rather than stored. Every ending is
+  // shared: there is one word, one gallows and one result.
+  for (const guessed of [[...'PLANET'], ['B', 'C', 'D', 'F', 'G', 'H']]) {
+    const one = play([hydrate(gameOf('PLANET', guessed, 1))], seated(1));
+    const two = play([hydrate(gameOf('PLANET', guessed, 1))], seated(2));
+
+    assert.equal(gameStatus(one), gameStatus(two));
+    assert.equal(maskedWord(one), maskedWord(two));
+    assert.equal(statusNotice(one), statusNotice(two));
+    assert.equal(wrongGuesses(one), wrongGuesses(two));
+  }
+});
+
+test('the player whose guess ended the game sees the same thing as the other', () => {
+  // The ending must not read differently to whoever brought it about, on either
+  // side of the round trip that carries their guess to the other card.
+  const winner = guess(gameFor(1, { guessed: [...'PLANE'] }), 'T');
+  const partner = play([hydrate(published(winner))], seated(2));
+
+  assert.equal(statusNotice(winner), YOU_WIN);
+  assert.equal(statusNotice(partner), YOU_WIN);
+  assert.equal(maskedWord(winner), maskedWord(partner));
+});
+
+test('the ending is not written to the room', () => {
+  // A stored outcome is a second opinion about a game that must look identical
+  // on both cards, and the only way two clients come to disagree about how it
+  // finished.
+  const lost = guess(gameFor(1, { guessed: ['B', 'C', 'F', 'G', 'H'] }), 'D');
+
+  assert.deepEqual(lost.outbox, { guessed: ['B', 'C', 'F', 'G', 'H', 'D'], turn: 2 });
+  assert.equal(JSON.stringify(lost.room).includes('status'), false);
+  assert.equal(JSON.stringify(lost.room).includes('won'), false);
+});
+
+test('the keyboard is dead once the game is over', () => {
+  // Both cards, whoever is nominally to move. There is nothing left to guess and
+  // a cursor moving around a keyboard that will not answer invites a press.
+  for (const guessed of [[...'PLANET'], ['B', 'C', 'D', 'F', 'G', 'H']]) {
+    const over = gameFor(1, { guessed, turn: 1 });
+
+    assert.equal(isMyTurn(over), false);
+    assert.equal(play([move('down'), move('right')], over), over);
+    assert.equal(play([activate()], over), over);
+  }
+});
+
+test('a game over on one card is over on the other as well', () => {
+  const lost = play([hydrate(gameOf('PLANET', ['B', 'C', 'D', 'F', 'G', 'H'], 2))], seated(2));
+  assert.equal(isMyTurn(lost), false);
+  assert.equal(play([activate()], lost), lost);
+});
+
+test('there is no ending before a room has arrived', () => {
+  assert.equal(gameStatus(play([])), 'playing');
+  assert.equal(gameStatus(play([activate()])), 'playing');
 });

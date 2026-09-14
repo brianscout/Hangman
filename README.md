@@ -3,16 +3,18 @@
 Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
 same gallows, alternating turns, shared outcome.
 
-**Two players can play a word out together, turn by turn; winning and losing are
-not handled yet.** Connecting drops you into the single shared room and waits, a
-second player arriving starts the game on both cards, and from there the two
-alternate: the player whose turn it is guesses a letter with Enter, every
-occurrence of it appears on both cards at once, and the turn passes whether the
-guess was right or wrong. The other card's keyboard is locked while it waits.
-Wrong guesses are counted from here on, but nothing draws the gallows yet and a
-completed word simply sits there — the end of a game comes next. The connectivity
-probe that proved the design possible has moved to `scripts/probe.html` and still
-runs.
+**A whole game can be played out, won and lost; there is no way to start a second
+one yet.** Connecting drops you into the single shared room and waits, a second
+player arriving starts the game on both cards, and from there the two alternate:
+the player whose turn it is guesses a letter with Enter, every occurrence of it
+appears on both cards at once, and the turn passes whether the guess was right or
+wrong. The other card's keyboard is locked while it waits. Every wrong guess
+draws one more part of the gallows on both cards, and the game ends the same way
+on both — YOU WIN when the last letter is revealed, YOU LOSE and the word given
+up when the sixth wrong guess completes the figure. What there is no way to do
+yet is play again: a finished card holds its ending, and the rematch comes next.
+The connectivity probe that proved the design possible has moved to
+`scripts/probe.html` and still runs.
 
 ## Layout
 
@@ -98,9 +100,39 @@ have been sent. The entry module publishes an outbox only when it is a new one,
 so a snapshot arriving from the room is never echoed straight back into it.
 
 The count of wrong guesses is derived from the word and the guess list rather
-than stored, for the same reason the masked word is. Nothing draws it yet; it is
-counted from here so the gallows has nothing to work out for itself when it
-arrives.
+than stored, for the same reason the masked word is. It is what the gallows is
+drawn from.
+
+## The gallows, winning and losing
+
+The gallows is inline SVG in seven states, from the empty frame through six body
+parts: head, body, two arms, two legs. Inline rather than an image because it
+stays sharp at whatever height the layout gives it, needs no hosting on a
+platform that refetches the page on every launch, and costs almost nothing in
+page weight. The frame is drawn one step back from the figure — the frame is
+context and the parts are the signal — but what a player reads off it is how many
+parts are there, which is a count of shapes and survives a waveguide washing every
+mid-tone out.
+
+One part per wrong guess, on both cards, so the danger is read off the figure
+rather than counted off the keyboard.
+
+The game ends when the last letter is revealed, which is YOU WIN, or when the
+sixth wrong guess completes the figure, which is YOU LOSE and gives the word up —
+the players have earned finding out what they were missing. Both players are
+always given the same ending, including the one whose guess brought it about.
+This is a collaborative game: one word, one gallows, one result.
+
+Neither outcome is written to the room. Both are derived from the word and the
+guess list, on each card, on every render — a stored outcome is a second opinion
+about a game that must look identical on both cards, and it is exactly how two
+clients come to disagree about how a game finished.
+
+The ending appears in the line the turn was in, because a game that has ended has
+no next player, and both keyboards go dead the moment it does. There is nothing
+left to guess, and a cursor moving around a keyboard that will not answer is an
+invitation to press it. A finished card stays where it is; playing again is the
+next ticket.
 
 ## The keyboard
 
@@ -132,12 +164,11 @@ anything that matters.
 
 The play card is the one screen with several things stacked on it, so its height
 is budgeted rather than centred: 552px of usable height holding a 67px word line,
-a 36px turn line and a 254px keyboard, which leaves 195px for the gallows. The
-gallows arrives with a later ticket, but its space is claimed now, so the card is
-settled at one screenful rather than being re-budgeted once there is something to
-draw up there. It is also the only part of the card that can be drawn to whatever
-it is given, which is why the turn line came out of its share and not out of the
-word or the keys.
+a 36px status line and a 254px keyboard, which leaves 195px for the gallows. The
+gallows is the only part of the card that can be drawn to whatever it is given,
+which is why the status line came out of its share and not out of the word or the
+keys — and why the ending, which lands in that same line at a larger size, is
+sized to fit the 36px it already had rather than taking more.
 
 ## Running it
 
@@ -176,6 +207,11 @@ written, dispatched as a hydrate. There is no database in the tests and nothing
 standing in for one, because the reducer never sees one. A whole word is played
 out that way in a single test — one player guesses, their outbox is written over
 the shared room, the other player is hydrated with it, and the turn comes back.
+
+The endings are tested at their boundaries — one letter short of the word and
+the letter that finishes it, five wrong guesses and the sixth — and on the
+property the whole design rests on: that two clients holding the same room derive
+the same status, the same word and the same line under it.
 
 The word list is tested too, but on its invariants rather than its contents:
 uppercase A to Z, five to eight letters, no duplicates. A word that broke one of
