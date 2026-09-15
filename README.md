@@ -1,7 +1,8 @@
 # Hangman — Meta Ray-Ban Display Web App
 
-Two-player collaborative Hangman for Meta Ray-Ban Display glasses. Same word,
-same gallows, alternating turns, shared outcome.
+Collaborative Hangman for Meta Ray-Ban Display glasses. Same word, same gallows,
+alternating turns, shared outcome — or the same game on your own when there is
+nobody to play against.
 
 **The whole loop works: lobby, pair, play, end, repeat.** Connecting drops you
 into the single shared room and waits, a second player arriving starts the game
@@ -31,6 +32,33 @@ a dead game. The connectivity probe that proved the design possible has moved to
 | `database.rules.json` | The database security rules, as deployed. The record of them. |
 | `test/` | Node's built-in test runner. No dependencies. |
 | `scripts/probe.html` | The connectivity probe, kept as a diagnostic. |
+
+## Playing alone
+
+The lobby opens on **Play solo**, because it is the only option that cannot fail
+to start: Connect needs a second player who may not be there.
+
+A solo game is the same game played from seat one against a room nobody else can
+see. It is a flag on the state rather than a second set of screens — one word,
+one gallows, one keyboard, one pair of endings — which is what lets every derived
+value stay exactly as it was instead of growing a second answer for the case
+where there is only one player. Four rules read the flag:
+
+- the turn stays put, because handing it to an empty seat two would lock the
+  keyboard against the only person holding it
+- pairing is skipped entirely, because both presence flags in a solo room are
+  false and that is what a vanished partner looks like — without this the game
+  would end on its first render
+- nothing is published, and no seat is claimed: a solo player must not occupy one
+  of the two seats a pair are trying to play each other in
+- Play again starts on the press. A rematch is an acceptance only because it
+  needs two of them, and a solo player is already both halves of that agreement
+
+The line that names whose turn it is says nothing in a solo game, but keeps its
+space, so the card does not shift under the player when the ending lands in it.
+
+Leaving to the lobby clears the flag. Without that, Connect would start another
+solo game and the room would never be joined again.
 
 ## Pairing
 

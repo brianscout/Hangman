@@ -92,27 +92,38 @@ function play(events, state = initialState()) {
 }
 
 // The sequence a player produces to get as far as the waiting screen with a seat
-// in hand, which is where every pairing test starts.
-const seated = (seat) => play([activate(), joined(seat)]);
+// in hand, which is where every pairing test starts. The lobby opens on Play
+// solo, so reaching Connect is a press down first.
+const seated = (seat) => play([move('down'), activate(), joined(seat)]);
+
+// Reaching Connect and pressing it. Spelled as a sequence rather than folded
+// into `play` because several tests press it twice, and the lobby always reopens
+// on Play solo.
+const connect = () => [move('down'), activate()];
+
+// A solo game, already on the play card with the named word in it. Nothing is
+// claimed and nothing is published, so unlike `seated` there is no seat to hand
+// in and no room to hydrate.
+const alone = (word = 'MARBLE') => play([activate(word)]);
 
 // --- the lobby ------------------------------------------------------------
 
-test('the lobby opens with Connect focused', () => {
-  assert.equal(focusedOption(play([])), 'connect');
+test('the lobby opens with Play solo focused', () => {
+  assert.equal(focusedOption(play([])), 'solo');
 });
 
 test('down moves focus to the next option', () => {
-  assert.equal(focusedOption(play([move('down')])), 'exit');
+  assert.equal(focusedOption(play([move('down')])), 'connect');
 });
 
 test('up moves focus to the previous option', () => {
-  const onExit = play([move('down')]);
-  assert.equal(focusedOption(play([move('up')], onExit)), 'connect');
+  const onConnect = play([move('down')]);
+  assert.equal(focusedOption(play([move('up')], onConnect)), 'solo');
 });
 
 test('focus wraps at both ends of the option list', () => {
   assert.equal(focusedOption(play([move('up')])), 'exit');
-  assert.equal(focusedOption(play([move('down'), move('down')])), 'connect');
+  assert.equal(focusedOption(play([move('down'), move('down'), move('down')])), 'solo');
 });
 
 test('focus stays in range however many times it moves', () => {
@@ -127,57 +138,57 @@ test('left and right do nothing in the lobby', () => {
 });
 
 test('activating Exit App leaves the app', () => {
-  assert.equal(play([move('down'), activate()]).screen, 'exited');
+  assert.equal(play([move('up'), activate()]).screen, 'exited');
 });
 
 test('nothing responds once the app has exited', () => {
-  const exited = play([move('down'), activate()]);
+  const exited = play([move('up'), activate()]);
   assert.equal(play([move('up'), activate()], exited), exited);
 });
 
 test('the reducer does not mutate the state it is given', () => {
   const start = deepFreeze(initialState());
   reduce(start, move('down'));
-  assert.equal(focusedOption(start), 'connect');
+  assert.equal(focusedOption(start), 'solo');
 });
 
 // --- getting into the room ------------------------------------------------
 
 test('activating Connect shows the waiting screen', () => {
-  assert.equal(play([activate()]).screen, 'waiting');
+  assert.equal(play([...connect()]).screen, 'waiting');
 });
 
 test('the waiting screen is shown before a seat has been claimed', () => {
   // The join takes a round trip. If the card sat on the lobby until it finished,
   // that round trip would look like a missed keypress.
-  assert.equal(play([activate()]).seat, null);
+  assert.equal(play([...connect()]).seat, null);
 });
 
 test('the waiting screen wants a seat in the room and the lobby does not', () => {
-  assert.equal(wantsRoom(play([activate()])), true);
+  assert.equal(wantsRoom(play([...connect()])), true);
   assert.equal(wantsRoom(play([])), false);
 });
 
 test('leaving the waiting screen returns to the lobby', () => {
-  assert.equal(play([activate(), activate()]).screen, 'lobby');
+  assert.equal(play([...connect(), activate()]).screen, 'lobby');
 });
 
 test('leaving the waiting screen gives up the seat', () => {
   // The entry module releases the seat by reconciling against wantsRoom, so
   // dropping it here is what clears this player's presence in the room.
-  const backInLobby = play([activate(), joined(1), activate()]);
+  const backInLobby = play([...connect(), joined(1), activate()]);
   assert.equal(wantsRoom(backInLobby), false);
   assert.equal(backInLobby.seat, null);
 });
 
 test('leaving and connecting again starts a fresh wait', () => {
-  const again = play([activate(), joined(1), activate(), activate()]);
+  const again = play([...connect(), joined(1), activate(), ...connect()]);
   assert.equal(again.screen, 'waiting');
   assert.equal(again.room, null);
 });
 
 test('moving does nothing on the waiting screen', () => {
-  const waiting = play([activate()]);
+  const waiting = play([...connect()]);
   assert.equal(play([move('up'), move('down'), move('left')], waiting), waiting);
 });
 
@@ -198,7 +209,7 @@ test('the second player starts the game on their own card too', () => {
 test('the game starts even if the room arrives before the seat does', () => {
   // The snapshot subscription and the seat claim resolve independently, so
   // either can land first and the pairing must not depend on which.
-  const roomFirst = play([activate(), hydrate(roomWith(1, 2)), joined(2)]);
+  const roomFirst = play([...connect(), hydrate(roomWith(1, 2)), joined(2)]);
   assert.equal(roomFirst.screen, 'playing');
 });
 
@@ -266,13 +277,13 @@ test('a full room offers no seat and is left untouched', () => {
 });
 
 test('finding the room full reports it rather than waiting forever', () => {
-  const rejected = play([{ type: 'joinRejected' }], play([activate()]));
+  const rejected = play([{ type: 'joinRejected' }], play([...connect()]));
   assert.equal(rejected.screen, 'notice');
   assert.equal(rejected.notice, ROOM_BUSY);
 });
 
 test('failing to reach the room reports it rather than waiting forever', () => {
-  const failed = play([{ type: 'joinFailed' }], play([activate()]));
+  const failed = play([{ type: 'joinFailed' }], play([...connect()]));
   assert.equal(failed.screen, 'notice');
   assert.equal(failed.notice, NO_CONNECTION);
 });
@@ -371,7 +382,7 @@ test('a wrong guess reveals nothing', () => {
 
 test('there is nothing to mask before a room has arrived', () => {
   assert.equal(maskedWord(play([])), '');
-  assert.equal(maskedWord(play([activate()])), '');
+  assert.equal(maskedWord(play([...connect()])), '');
 });
 
 // --- reading the room -----------------------------------------------------
@@ -755,7 +766,7 @@ test('a game over on one card is over on the other as well', () => {
 
 test('there is no ending before a room has arrived', () => {
   assert.equal(gameStatus(play([])), 'playing');
-  assert.equal(gameStatus(play([activate()])), 'playing');
+  assert.equal(gameStatus(play([...connect()])), 'playing');
 });
 
 // --- playing again ---------------------------------------------------------
@@ -1036,4 +1047,115 @@ test('a seat carries no acceptance from whoever sat in it last', () => {
   };
 
   assert.deepEqual(claimSeat(abandoned, 'PLANET').room.rematch, { 1: false, 2: false });
+});
+
+// --- playing alone --------------------------------------------------------
+
+// A solo game is the same game from seat one against a room nobody else can
+// see. These assert the four rules that read the flag, and that everything the
+// paired game derives is left alone by it.
+
+const guessAll = (state, letters) => [...letters].reduce(guess, state);
+
+// Six letters of MARBLE that are not in it, which is exactly a full gallows.
+const SIX_WRONG = 'CDFGHJ';
+
+test('Play solo starts a game without waiting for anybody', () => {
+  assert.equal(alone().screen, 'playing');
+});
+
+test('a solo game starts with the word it was given', () => {
+  assert.equal(maskedWord(alone('PLANET')), '------');
+});
+
+test('a solo game never claims a seat in the room', () => {
+  // The room is one fixed path shared by everyone. A solo player holding a seat
+  // in it would take one of the two that a pair are trying to play each other in.
+  assert.equal(wantsRoom(alone()), false);
+});
+
+test('a solo game publishes nothing', () => {
+  assert.equal(guess(alone(), 'M').outbox, null);
+});
+
+test('the keyboard belongs to the solo player', () => {
+  assert.equal(isMyTurn(alone()), true);
+});
+
+test('the turn never leaves the solo player', () => {
+  // The turn is stored as a seat, and handing it to an empty seat two would lock
+  // the keyboard against the only person holding it.
+  assert.equal(isMyTurn(guess(alone(), 'M')), true);
+  assert.equal(isMyTurn(guessAll(alone(), 'MAR')), true);
+});
+
+test('a solo player can guess twice in a row', () => {
+  assert.equal(maskedWord(guessAll(alone(), 'MA')), 'MA----');
+});
+
+test('the line that names the turn says nothing in a solo game', () => {
+  assert.equal(statusNotice(alone()), '');
+});
+
+test('a solo game is never told its partner left', () => {
+  // Both presence flags in a solo room are false, which in a paired game is the
+  // partner having vanished. Pairing has to stay out of it entirely.
+  assert.equal(guessAll(alone(), 'MAR').screen, 'playing');
+});
+
+test('a solo game can be won', () => {
+  // The letters of MARBLE in alphabetical order, because `reach` only ever walks
+  // the cursor forwards and cannot come back for an earlier one.
+  const won = guessAll(alone(), 'ABELMR');
+  assert.equal(gameStatus(won), 'won');
+  assert.equal(statusNotice(won), YOU_WIN);
+});
+
+test('a solo game can be lost, and gives the word up', () => {
+  const lost = guessAll(alone(), SIX_WRONG);
+  assert.equal(gameStatus(lost), 'lost');
+  assert.equal(statusNotice(lost), YOU_LOSE);
+  assert.equal(maskedWord(lost), 'MARBLE');
+  assert.equal(wrongGuesses(lost), MAX_WRONG);
+});
+
+test('a finished solo game hands the card to the two options', () => {
+  assert.equal(isGameOver(guessAll(alone(), SIX_WRONG)), true);
+  assert.equal(focusedOption(guessAll(alone(), SIX_WRONG)), 'rematch');
+});
+
+test('a solo rematch starts on the press, with nobody to wait for', () => {
+  const again = play([activate('PLANET')], guessAll(alone(), SIX_WRONG));
+  assert.equal(gameStatus(again), 'playing');
+  assert.equal(maskedWord(again), '------');
+});
+
+test('a solo rematch clears the round before it', () => {
+  const again = play([activate('PLANET')], guessAll(alone(), SIX_WRONG));
+  assert.deepEqual(guessedLetters(again), []);
+  assert.equal(wrongGuesses(again), 0);
+});
+
+test('a solo player is never asked to wait for a partner to accept', () => {
+  assert.equal(rematchNotice(guessAll(alone(), SIX_WRONG)), '');
+});
+
+test('leaving a solo game returns to the lobby', () => {
+  const over = guessAll(alone(), SIX_WRONG);
+  const left = play([move('down'), activate()], over);
+  assert.equal(left.screen, 'lobby');
+});
+
+test('leaving a solo game puts the two-player game back within reach', () => {
+  // The flag has to come off on the way out, or Connect would start another
+  // solo game and the room would never be joined again.
+  const over = guessAll(alone(), SIX_WRONG);
+  const left = play([move('down'), activate()], over);
+  assert.equal(left.solo, false);
+  assert.equal(play([...connect()], left).screen, 'waiting');
+});
+
+test('a paired game is not a solo one', () => {
+  assert.equal(gameFor(1).solo, false);
+  assert.equal(statusNotice(gameFor(1)), YOUR_TURN);
 });

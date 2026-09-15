@@ -14,7 +14,11 @@
 
 // The lobby's options, in the order they appear on the card. Focus is stored as
 // an index into this list rather than as a label, so movement is arithmetic.
-export const LOBBY_OPTIONS = ['connect', 'exit'];
+//
+// Solo is first because it is the only one that cannot fail to start: Connect
+// needs a second player who may not be there, and the lobby opens on the option
+// that always works.
+export const LOBBY_OPTIONS = ['solo', 'connect', 'exit'];
 
 // The two ways out of a finished game, in the order they appear at the bottom of
 // the play card. Focus is an index into this list for the same reason the
@@ -85,6 +89,11 @@ export function initialState() {
     notice: null,
     cursor: 0,
     outbox: null,
+    // Whether this game has a second player in it. A solo game is the same game
+    // played from seat one against a room nobody else can see, which is why it
+    // is a flag on the state rather than a second set of screens: one word, one
+    // gallows, one keyboard, one set of endings, and four rules that read it.
+    solo: false,
   };
 }
 
@@ -110,12 +119,38 @@ function reduceLobby(state, action) {
     case 'move':
       return moveLobbyFocus(state, action.direction);
     case 'activate':
-      return focusedOption(state) === 'exit'
-        ? { ...state, screen: 'exited' }
-        : { ...state, screen: 'waiting' };
+      switch (focusedOption(state)) {
+        case 'exit':
+          return { ...state, screen: 'exited' };
+        case 'solo':
+          return startSolo(state, action.newWord);
+        default:
+          return { ...state, screen: 'waiting' };
+      }
     default:
       return state;
   }
+}
+
+// A game with nobody else in it. It starts on the play card rather than passing
+// through the waiting screen, because there is nothing to wait for: no seat to
+// claim, no partner to arrive, and no round trip between pressing and playing.
+//
+// The room is built here and never leaves this client. Giving a solo game the
+// same shape as a paired one is what lets every derived value — the masked word,
+// the wrong count, the ending — stay exactly as it was, rather than growing a
+// second answer for the case where there is only one player.
+function startSolo(state, newWord) {
+  return {
+    ...state,
+    screen: 'playing',
+    solo: true,
+    // Seat one, because the turn is stored as a seat and this player holds the
+    // only one. `isMyTurn` then answers yes without being told about solo at all.
+    seat: 1,
+    room: { ...normalizeRoom(null), word: newWord },
+    ...freshRound(),
+  };
 }
 
 // The waiting screen goes up the instant Connect is pressed, before the room has
@@ -188,6 +223,14 @@ function freshRound() {
 
 // The press a finished game understands, which is one of exactly two things.
 function activateEnd(state, newWord) {
+  // Another round, immediately. A rematch is an acceptance only because it needs
+  // two of them; a solo player asking for one is already both halves of that
+  // agreement, and making them wait for a partner who does not exist would be a
+  // pause with no end.
+  if (state.solo && END_OPTIONS[state.endFocus] === 'rematch') {
+    return startSolo(state, newWord);
+  }
+
   if (END_OPTIONS[state.endFocus] === 'exit-to-lobby') {
     // Straight back to the lobby, seat and all. The entry module reconciles the
     // seat against the state, so letting go of the room here is what clears this
@@ -263,15 +306,21 @@ function guess(state) {
   if (state.room.guessed.includes(letter)) return state;
 
   const guessed = [...state.room.guessed, letter];
-  const turn = partnerSeat(state.seat);
+  // The turn passes to the other player, or stays where it is when there is no
+  // other player. Handing a solo game's turn to an empty seat two would lock the
+  // keyboard against the only person holding it.
+  const turn = state.solo ? state.seat : partnerSeat(state.seat);
 
   // Only the two keys that changed are published. Sending the whole room would
   // put this client's copy of the presence flags back over the partner's, and
   // the partner's are the one part of the room this client does not own.
+  //
+  // A solo game publishes nothing at all. Its room exists only on this client,
+  // and there is nobody to tell.
   return placeCursor({
     ...state,
     room: { ...state.room, guessed, turn },
-    outbox: { guessed, turn },
+    outbox: state.solo ? state.outbox : { guessed, turn },
   });
 }
 
@@ -290,6 +339,10 @@ function settle(state, newWord = null) {
 }
 
 function pair(state) {
+  // A solo game holds a seat and a room but has no second player, so both halves
+  // of pairing are meaningless here — and the absent one would otherwise read as
+  // a partner who has just left, ending the game on its first render.
+  if (state.solo) return state;
   if (state.seat === null || state.room === null) return state;
 
   const partnerPresent = state.room.players[partnerSeat(state.seat)].present;
@@ -360,6 +413,9 @@ export function isGameOver(state) {
 // answer. Only the player who has accepted sees it: the wait belongs to them,
 // and the other player is being asked for an answer rather than for patience.
 export function rematchNotice(state) {
+  // Nobody to wait for. A solo rematch starts on the press.
+  if (state.solo) return '';
+
   const mine = state.room?.rematch?.[state.seat] === true;
   const theirs = state.room?.rematch?.[partnerSeat(state.seat)] === true;
   return mine && !theirs ? WAITING_FOR_PARTNER : '';
@@ -542,6 +598,10 @@ export function statusNotice(state) {
     case 'lost':
       return YOU_LOSE;
     default:
+      // A solo game has nothing to say here. The line exists to tell two players
+      // apart, and its space is kept rather than collapsed so the card does not
+      // shift under the player when the ending lands in it.
+      if (state.solo) return '';
       return isMyTurn(state) ? YOUR_TURN : PARTNER_TURN;
   }
 }
@@ -550,6 +610,11 @@ export function statusNotice(state) {
 // the connection against this rather than reacting to individual transitions, so
 // no path out of the room can forget to release the seat.
 export function wantsRoom(state) {
+  // A solo game is played entirely on this client. It never claims a seat, so it
+  // never writes presence, and it cannot take a seat from two people who are
+  // trying to play each other.
+  if (state.solo) return false;
+
   return state.screen === 'waiting' || state.screen === 'playing';
 }
 
