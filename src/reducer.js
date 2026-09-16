@@ -57,6 +57,12 @@ export const PARTNER_TURN = "PARTNER'S TURN";
 // still waiting for them.
 export const PARTNER_AWAY = 'PARTNER RECONNECTING';
 
+// Shown when it is this client's own connection that has gone, rather than the
+// partner's. Both look like a missing presence flag from the outside, and saying
+// which one it is matters: one of them is the other player's problem and the
+// other is this headset's.
+export const RECONNECTING = 'RECONNECTING';
+
 // How long a partner may be missing before the game ends. Presence is a socket,
 // and a socket drops for reasons that have nothing to do with the player holding
 // it — a sleeping display, a WiFi handover, a NAT timing out an idle connection.
@@ -117,10 +123,20 @@ export function initialState() {
     // entry module, for the same reason the notice timer does: this module has
     // no access to one and is tested without it.
     partnerAbsent: false,
+    // Whether this client is talking to the database. Assumed true until the
+    // adapter says otherwise, because a game that opened with RECONNECTING on
+    // the card before it had even tried would be lying.
+    connected: true,
   };
 }
 
 export function reduce(state, action) {
+  // Handled before the screen, because the connection goes up and down
+  // underneath whatever is on the card and no screen owns it.
+  if (action.type === 'connection') {
+    return action.connected === state.connected ? state : { ...state, connected: action.connected };
+  }
+
   switch (state.screen) {
     case 'lobby':
       return reduceLobby(state, action);
@@ -638,6 +654,11 @@ export function statusNotice(state) {
       // apart, and its space is kept rather than collapsed so the card does not
       // shift under the player when the ending lands in it.
       if (state.solo) return '';
+      // This client's own connection first. While it is down, nothing known
+      // about the partner is current — the last snapshot is as old as the
+      // outage — so blaming them for a silence this end caused would send the
+      // player looking at the wrong headset.
+      if (!state.connected) return RECONNECTING;
       // A missing partner takes the line over. Whose turn it is stops being the
       // useful thing to say the moment the answer might be nobody's, and a card
       // that went on insisting it was the partner's turn while they were gone
@@ -655,7 +676,17 @@ export function statusNotice(state) {
 // same reason it reconciles the seat: a partner can go and come back more than
 // once, and reconciling means no path can leave a stale clock running.
 export function awaitingPartner(state) {
-  return state.screen === 'playing' && state.partnerAbsent;
+  // Not while this client is the one that is offline. Nothing arrives during an
+  // outage at this end, so the partner cannot be seen coming back — and running
+  // the clock anyway would end the game over a silence they had no part in.
+  return state.screen === 'playing' && state.partnerAbsent && state.connected;
+}
+
+// Whether the connection is worth kicking. The SDK reconnects on its own, but a
+// client that was frozen can come back holding a socket the server abandoned,
+// and only a fresh one gets it talking again.
+export function needsReconnect(state) {
+  return wantsRoom(state) && !state.connected;
 }
 
 export function wantsRoom(state) {

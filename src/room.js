@@ -46,7 +46,7 @@ function connect() {
 // Takes a seat and starts forwarding the room. Resolves with the seat number, or
 // with a null seat if both seats were already taken. `leave` is always safe to
 // call, including on a join that never got a seat.
-export async function joinRoom(onRoom) {
+export async function joinRoom(onRoom, onConnection = () => {}) {
   const { db, database } = await connect();
   const roomRef = db.ref(database, ROOM_PATH);
 
@@ -89,7 +89,13 @@ export async function joinRoom(onRoom) {
   // server, and it goes true again on every reconnect, which is exactly when
   // this has to run.
   const stopPresence = db.onValue(db.ref(database, '.info/connected'), (snapshot) => {
-    if (snapshot.val() !== true) return;
+    const connected = snapshot.val() === true;
+    // Reported onward so the card can say whose connection is missing. Without
+    // this, a socket that dropped at this end and a partner who vanished at the
+    // other look identical on the card, and they need completely different
+    // fixes.
+    onConnection(connected);
+    if (!connected) return;
 
     // The hook is re-armed before the flag goes back up. The other order leaves
     // a window where this client is present with nothing registered to clear it,
@@ -104,6 +110,21 @@ export async function joinRoom(onRoom) {
 
   return {
     seat,
+
+    // Forces a fresh socket. The SDK reconnects on its own with a backoff, but a
+    // client that was frozen — a sleeping display, a backgrounded tile — can come
+    // back to a socket the server gave up on long ago and sit there believing it
+    // is still connected. Tearing it down and dialling again is the only thing
+    // that reliably shakes that loose.
+    //
+    // Going offline fires the disconnect hook, so this briefly reads as this
+    // player leaving. That is why it is only ever called when the connection is
+    // already believed to be down: the flag is going to be cleared anyway, and
+    // the watcher above puts it back the moment the new socket lands.
+    reconnect() {
+      db.goOffline(database);
+      db.goOnline(database);
+    },
 
     // Merges the reducer's outbox into the room. A merge rather than a write of
     // the whole document, because the presence flags in it belong to the two

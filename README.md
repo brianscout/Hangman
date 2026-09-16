@@ -91,6 +91,21 @@ because a pause with nothing said about it is what a player reads as the app
 having stopped. A partner whose presence returns first clears the flag and the
 game carries on with the round untouched.
 
+The card distinguishes whose connection it is. A socket dropped at this end and a
+partner vanished at the other both arrive as a missing presence flag, and they
+need entirely different fixes, so this client's own connection is tracked
+separately and says RECONNECTING about itself. It outranks the partner's state,
+because nothing known about them is current during an outage here — and the grace
+clock is paused for the same reason: a partner cannot be seen coming back through
+a connection that is down, and ending the game over a silence they had no part in
+would be this client's fault.
+
+A tile that is backgrounded can be frozen outright and come back holding a socket
+the server abandoned while it was away, which the SDK believes is fine and waits
+on forever. Returning to the foreground tears that socket down and dials again,
+guarded on the connection actually being down so a glance away does not disturb a
+working one.
+
 The clock lives in the entry module and is reconciled against the state, the same
 way the seat and the notice timer are, so no path out of a game can leave one
 running.

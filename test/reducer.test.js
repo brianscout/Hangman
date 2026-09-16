@@ -10,6 +10,7 @@ import {
   PARTNER_AWAY,
   PARTNER_LEFT,
   PARTNER_TURN,
+  RECONNECTING,
   ROOM_BUSY,
   WAITING_FOR_PARTNER,
   YOUR_TURN,
@@ -25,6 +26,7 @@ import {
   isGameOver,
   isMyTurn,
   maskedWord,
+  needsReconnect,
   normalizeRoom,
   reduce,
   rematchNotice,
@@ -1215,4 +1217,63 @@ test('leaving a solo game puts the two-player game back within reach', () => {
 test('a paired game is not a solo one', () => {
   assert.equal(gameFor(1).solo, false);
   assert.equal(statusNotice(gameFor(1)), YOUR_TURN);
+});
+
+// --- whose connection is it -----------------------------------------------
+
+// A dropped socket at this end and a partner who vanished at the other both show
+// up as a missing presence flag. They need completely different fixes, so the
+// card has to say which one it is.
+
+const connection = (connected) => ({ type: 'connection', connected });
+
+test('a game assumes it is connected until told otherwise', () => {
+  assert.equal(initialState().connected, true);
+});
+
+test('losing this end of the connection says so, rather than blaming the partner', () => {
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  assert.equal(statusNotice(play([connection(false)], playing)), RECONNECTING);
+});
+
+test('this end being down outranks the partner being missing', () => {
+  // Nothing known about the partner is current during an outage at this end, so
+  // pointing at them would send the player looking at the wrong headset.
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  const dark = play([hydrate(roomWith(1)), connection(false)], playing);
+
+  assert.equal(statusNotice(dark), RECONNECTING);
+});
+
+test('the grace clock does not run while this end is offline', () => {
+  // The partner cannot be seen coming back during an outage here, and ending the
+  // game over a silence they had no part in would be this client's fault.
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  const dark = play([hydrate(roomWith(1)), connection(false)], playing);
+
+  assert.equal(awaitingPartner(dark), false);
+  assert.equal(awaitingPartner(play([connection(true)], dark)), true);
+});
+
+test('the connection is worth kicking only while a game wants the room', () => {
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+
+  assert.equal(needsReconnect(play([connection(false)], playing)), true);
+  assert.equal(needsReconnect(playing), false);
+  // Nothing to kick from the lobby, and nothing to kick in a solo game.
+  assert.equal(needsReconnect(play([connection(false)])), false);
+  assert.equal(needsReconnect(play([connection(false)], alone())), false);
+});
+
+test('the connection is tracked without disturbing the screen', () => {
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  const dark = play([connection(false)], playing);
+
+  assert.equal(dark.screen, 'playing');
+  assert.equal(guessedLetters(dark).length, guessedLetters(playing).length);
+});
+
+test('an unchanged connection changes nothing', () => {
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  assert.equal(play([connection(true)], playing), playing);
 });

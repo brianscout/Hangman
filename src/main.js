@@ -5,7 +5,14 @@
 // Untested on purpose: there is nothing here to get wrong that running the app
 // would not show immediately.
 
-import { PARTNER_GRACE_MS, awaitingPartner, initialState, reduce, wantsRoom } from './reducer.js';
+import {
+  PARTNER_GRACE_MS,
+  awaitingPartner,
+  initialState,
+  needsReconnect,
+  reduce,
+  wantsRoom,
+} from './reducer.js';
 import { render } from './render.js';
 import { joinRoom } from './room.js';
 import { pickWord } from './words.js';
@@ -64,6 +71,19 @@ window.addEventListener('keydown', (event) => {
   dispatch(action);
 });
 
+// A tile that goes to the background can be frozen outright, and a frozen client
+// comes back holding a socket the server gave up on while it was away. The SDK
+// believes that socket is fine and waits on it, so the game sits there saying it
+// is reconnecting and never does.
+//
+// Coming back to the foreground is the moment to check, and the only moment the
+// page reliably hears about. The kick is guarded on the connection actually being
+// down, so a tile glanced away from and back does not tear up a working one.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (needsReconnect(state)) seatHeld?.reconnect();
+});
+
 // The seat is reconciled against what the state wants rather than taken and
 // released at particular transitions. There are several ways out of the room —
 // backing out of the wait, the partner vanishing, a room that was already full —
@@ -78,7 +98,10 @@ async function syncSeat() {
 
   claiming = true;
   try {
-    const joined = await joinRoom((room) => dispatch({ type: 'hydrate', room }));
+    const joined = await joinRoom(
+      (room) => dispatch({ type: 'hydrate', room }),
+      (connected) => dispatch({ type: 'connection', connected }),
+    );
     claiming = false;
 
     // The player may have given up and walked back to the lobby while the room
