@@ -25,13 +25,36 @@ const ROOM_PATH = 'room';
 // their glasses on, and it should not re-download Firebase to do it.
 let connection = null;
 
+// How often a seat says it is still there. Several times over inside the window
+// the reducer allows, so one missed write never costs a player their seat.
+const HEARTBEAT_MS = 10000;
+
+// The gap between this device's clock and the database's, which the server hands
+// out and keeps up to date. Heartbeats are compared against a threshold, and two
+// headsets whose clocks disagree by a minute would otherwise evict each other on
+// sight — glasses are exactly the sort of device whose clock nobody has checked.
+let serverOffset = 0;
+
+// The database's idea of now, which is the only clock the seats are read against.
+export function serverNow() {
+  return Date.now() + serverOffset;
+}
+
 function connect() {
   connection ??= (async () => {
     const [{ initializeApp }, db] = await Promise.all([
       import(`${CDN}/firebase-app.js`),
       import(`${CDN}/firebase-database.js`),
     ]);
-    return { db, database: db.getDatabase(initializeApp(firebaseConfig)) };
+    const database = db.getDatabase(initializeApp(firebaseConfig));
+
+    // Watched for the life of the app rather than per join, because the offset is
+    // a property of this device and not of any one game.
+    db.onValue(db.ref(database, '.info/serverTimeOffset'), (snapshot) => {
+      if (typeof snapshot.val() === 'number') serverOffset = snapshot.val();
+    });
+
+    return { db, database };
   })().catch((error) => {
     // Forget a failed load. Cached, it would be handed to every later attempt,
     // so one bad moment on the network at launch would leave the app unable to
@@ -61,7 +84,7 @@ export async function joinRoom(onRoom, onConnection = () => {}) {
   // read-then-write would hand them both seat one.
   let seat = null;
   const { committed } = await db.runTransaction(roomRef, (current) => {
-    const claim = claimSeat(current, word);
+    const claim = claimSeat(current, word, serverNow());
     seat = claim.seat;
     // Returning nothing aborts. The room is full and there is no seat to take.
     return claim.seat === null ? undefined : claim.room;
@@ -75,6 +98,20 @@ export async function joinRoom(onRoom, onConnection = () => {}) {
   // reason presence is a disconnect hook and not a goodbye message: a goodbye
   // message is exactly what a dying client cannot send.
   await db.onDisconnect(presenceRef).set(false);
+
+  // Says the seat is still held, on a timer, so that a seat whose client has
+  // stopped existing goes quiet and can be taken by somebody else. The disconnect
+  // hook alone was not enough: the server only fires it once it notices the
+  // socket is gone, and a player killed or frozen mid-game left a seat that read
+  // as occupied long enough for them to be told GAME IN PROGRESS by their own
+  // abandoned seat.
+  //
+  // The server's own timestamp, not this device's, because the stamp is read
+  // against a threshold by whichever client picks it up next.
+  const seenRef = db.ref(database, `${ROOM_PATH}/players/${seat}/seen`);
+  const beat = () => db.set(seenRef, db.serverTimestamp()).catch(() => {});
+  beat();
+  const heartbeat = setInterval(beat, HEARTBEAT_MS);
 
   // Claimed again on every reconnect, rather than once when the seat was taken.
   //
@@ -103,6 +140,7 @@ export async function joinRoom(onRoom, onConnection = () => {}) {
     db.onDisconnect(presenceRef)
       .set(false)
       .then(() => db.set(presenceRef, true))
+      .then(() => db.set(seenRef, db.serverTimestamp()))
       .catch(() => {});
   });
 
@@ -150,6 +188,7 @@ export async function joinRoom(onRoom, onConnection = () => {}) {
 
     leave() {
       unsubscribe();
+      clearInterval(heartbeat);
       // Before anything else. The reconnect watcher exists to put this client's
       // presence back, and left running it would do exactly that to a seat the
       // player has just given up.

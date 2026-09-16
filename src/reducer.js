@@ -75,6 +75,32 @@ export const RECONNECTING = 'RECONNECTING';
 // stopped.
 export const PARTNER_GRACE_MS = 30000;
 
+// How old a seat's heartbeat may be before the seat counts as empty.
+//
+// A presence flag is cleared by the database's disconnect hook, which the server
+// only fires once it notices the socket is gone — and for a client that was
+// killed or frozen rather than closed, that can take minutes. For as long as it
+// takes, the seat reads as occupied by somebody who is not there, and the room
+// says GAME IN PROGRESS to the very player trying to get back into it.
+//
+// So a seat is held by a client that is still saying so, not by a flag nobody
+// cleared. Forty-five seconds is several missed heartbeats: long enough that a
+// slow network never evicts a player who is still there.
+export const SEAT_STALE_MS = 45000;
+
+// A seat with no heartbeat at all is treated as held, not as stale.
+//
+// This matters more than it looks. If the database rules reject the heartbeat
+// field, every seat would read as unstamped — and stale-means-empty would then
+// evict both players from every game, continuously. Unstamped-means-held makes
+// that failure quiet instead: the room behaves exactly as it did before
+// heartbeats existed. It also leaves rooms written by an older build alone.
+function seatHeld(seat, now) {
+  if (seat?.present !== true) return false;
+  if (typeof seat.seen !== 'number') return true;
+  return now - seat.seen < SEAT_STALE_MS;
+}
+
 // The end of the game, in the same place on the card as the turn it replaces.
 // Both players are always told the same one of these: there is one word, one
 // gallows and one result, and the result is shared whichever of them brought it
@@ -202,9 +228,9 @@ function reduceWaiting(state, action) {
       // shows up must not be stuck here.
       return initialState();
     case 'joined':
-      return settle({ ...state, seat: action.seat }, action.newWord);
+      return settle({ ...state, seat: action.seat }, action.newWord, action.now);
     case 'hydrate':
-      return settle({ ...state, room: normalizeRoom(action.room) }, action.newWord);
+      return settle({ ...state, room: normalizeRoom(action.room) }, action.newWord, action.now);
     case 'joinRejected':
       return { ...state, screen: 'notice', notice: ROOM_BUSY };
     case 'joinFailed':
@@ -231,7 +257,7 @@ function reducePlaying(state, action) {
       if (over) return moveEndFocus(state, action.direction);
       return isMyTurn(state) ? moveCursor(state, action.direction) : state;
     case 'activate':
-      return over ? activateEnd(state, action.newWord) : guess(state);
+      return over ? activateEnd(state, action) : guess(state);
     case 'hydrate':
       return hydratePlaying(state, action);
     case 'partnerGone':
@@ -255,7 +281,7 @@ function hydratePlaying(state, action) {
   const room = normalizeRoom(action.room);
   const started = room.guessed.length < guessedLetters(state).length;
 
-  return settle({ ...state, room, ...(started ? freshRound() : null) }, action.newWord);
+  return settle({ ...state, room, ...(started ? freshRound() : null) }, action.newWord, action.now);
 }
 
 // What the next round owes this client, on top of whatever the room says. Both
@@ -266,7 +292,8 @@ function freshRound() {
 }
 
 // The press a finished game understands, which is one of exactly two things.
-function activateEnd(state, newWord) {
+function activateEnd(state, action) {
+  const { newWord, now } = action;
   // Another round, immediately. A rematch is an acceptance only because it needs
   // two of them; a solo player asking for one is already both halves of that
   // agreement, and making them wait for a partner who does not exist would be a
@@ -284,13 +311,13 @@ function activateEnd(state, newWord) {
     return initialState();
   }
 
-  return acceptRematch(state, newWord);
+  return acceptRematch(state, newWord, now);
 }
 
 // Asking for another round. It is an acceptance rather than a start: a rematch
 // one player began alone would drag the other into a round they had not asked
 // for, so this writes a flag and waits.
-function acceptRematch(state, newWord) {
+function acceptRematch(state, newWord, now) {
   if (state.seat === null || state.room.rematch[state.seat]) return state;
 
   // The flag is written at its own path rather than as a whole rematch object,
@@ -378,18 +405,22 @@ function reduceNotice(state, action) {
 // Everything that depends on both halves of the pairing — which seat this client
 // holds and what the room says — decided in one place. A seat claim and a room
 // snapshot can land in either order, so neither may own the decision alone.
-function settle(state, newWord = null) {
-  return placeCursor(startRematch(pair(state), newWord));
+function settle(state, newWord = null, now = 0) {
+  return placeCursor(startRematch(pair(state, now), newWord));
 }
 
-function pair(state) {
+function pair(state, now) {
   // A solo game holds a seat and a room but has no second player, so both halves
   // of pairing are meaningless here — and the absent one would otherwise read as
   // a partner who has just left, ending the game on its first render.
   if (state.solo) return state;
   if (state.seat === null || state.room === null) return state;
 
-  const partnerPresent = state.room.players[partnerSeat(state.seat)].present;
+  // A partner whose heartbeat has stopped counts as gone even while their flag
+  // still says otherwise. A frozen client holds its socket open, so the server
+  // never fires the hook that would clear it, and the game would otherwise wait
+  // on a turn belonging to somebody who is not coming back.
+  const partnerPresent = seatHeld(state.room.players[partnerSeat(state.seat)], now);
 
   // The second player's arrival starts the game on both cards. Neither player
   // presses start; each simply sees the other appear in the room.
@@ -712,10 +743,20 @@ export function normalizeRoom(room) {
     guessed: room?.guessed ?? [],
     turn: room?.turn ?? 1,
     players: {
-      1: { present: room?.players?.[1]?.present === true },
-      2: { present: room?.players?.[2]?.present === true },
+      1: normalizeSeat(room?.players?.[1]),
+      2: normalizeSeat(room?.players?.[2]),
     },
     rematch: { 1: room?.rematch?.[1] === true, 2: room?.rematch?.[2] === true },
+  };
+}
+
+// `seen` is carried through as whatever it is rather than defaulted to a number,
+// because "no heartbeat" and "a heartbeat from long ago" mean different things
+// and only one of them frees the seat.
+function normalizeSeat(seat) {
+  return {
+    present: seat?.present === true,
+    seen: typeof seat?.seen === 'number' ? seat.seen : null,
   };
 }
 
@@ -731,29 +772,35 @@ export function normalizeRoom(room) {
 // makes "the player who created the room chose the word" true by construction
 // rather than by a second write that could lose a race with the other player
 // arriving.
-export function claimSeat(room, newWord = null) {
+export function claimSeat(room, newWord = null, now = Date.now()) {
   const current = normalizeRoom(room);
-  const present = [current.players[1].present, current.players[2].present];
+  // A seat is held by a client still saying so, not by a flag nobody cleared.
+  // Without this, a player who was cut off mid-game could not get back into the
+  // room they had just been thrown out of: their own abandoned seat was what the
+  // room was full of.
+  const held = [seatHeld(current.players[1], now), seatHeld(current.players[2], now)];
 
   // An empty room is reset rather than adopted. Whatever is lying in it belongs
   // to a game that is over, and inheriting its word or its guesses would start
   // this game already half played.
-  if (!present[0] && !present[1]) {
-    return { seat: 1, room: occupy({ ...normalizeRoom(null), word: newWord }, 1) };
+  if (!held[0] && !held[1]) {
+    return { seat: 1, room: occupy({ ...normalizeRoom(null), word: newWord }, 1, now) };
   }
 
-  if (!present[0]) return { seat: 1, room: occupy(current, 1) };
-  if (!present[1]) return { seat: 2, room: occupy(current, 2) };
+  if (!held[0]) return { seat: 1, room: occupy(current, 1, now) };
+  if (!held[1]) return { seat: 2, room: occupy(current, 2, now) };
 
   // Both seats taken. One fixed room means one game at a time, globally, which is
   // the accepted cost of pairing without a room code on a device that cannot type.
   return { seat: null, room: null };
 }
 
-function occupy(room, seat) {
+function occupy(room, seat, now) {
   return {
     ...room,
-    players: { ...room.players, [seat]: { present: true } },
+    // Stamped in the same write that takes the seat, so there is never a moment
+    // where a seat is held with no heartbeat behind it.
+    players: { ...room.players, [seat]: { present: true, seen: now } },
     // A seat that has just been taken carries no acceptance. Whatever the last
     // occupant left in it belongs to a rematch they are not here for, and the
     // player sitting down has agreed to nothing.

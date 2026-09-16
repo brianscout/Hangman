@@ -14,7 +14,7 @@ import {
   wantsRoom,
 } from './reducer.js';
 import { render } from './render.js';
-import { joinRoom } from './room.js';
+import { joinRoom, serverNow } from './room.js';
 import { pickWord } from './words.js';
 
 // The Neural Band and temple strip are translated by the glasses OS into exactly
@@ -39,13 +39,16 @@ let noticeTimer = null;
 let partnerTimer = null;
 
 function dispatch(action) {
-  // Every action carries a freshly drawn word, which the reducer uses only if
-  // this transition turns out to be the one that starts another round. Drawn
-  // here rather than in the reducer for the same reason the room's first word
-  // is drawn in the adapter: picking at random is the one part of starting a
-  // game that cannot be pure, and the reducer decides rather than does. Drawing
-  // one that is thrown away costs an array index.
-  const next = reduce(state, { ...action, newWord: pickWord() });
+  // Every action carries a freshly drawn word and the time, because either may
+  // turn out to be what this transition needs and neither can be reached from
+  // inside a pure reducer. Picking at random and reading a clock are the two
+  // things the reducer cannot do, so they are done here and decided there.
+  //
+  // The word is usually thrown away, which costs an array index. The time is the
+  // database's rather than this device's: seats are held by a heartbeat read
+  // against a threshold, and two headsets whose clocks disagree would read each
+  // other's seats as long abandoned.
+  const next = reduce(state, { ...action, newWord: pickWord(), now: serverNow() });
   // The reducer returns the same object when nothing changed, so an inert press
   // costs nothing and cannot repaint the card.
   if (next === state) return;

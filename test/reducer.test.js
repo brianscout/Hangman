@@ -12,6 +12,7 @@ import {
   PARTNER_TURN,
   RECONNECTING,
   ROOM_BUSY,
+  SEAT_STALE_MS,
   WAITING_FOR_PARTNER,
   YOUR_TURN,
   YOU_LOSE,
@@ -1276,4 +1277,87 @@ test('the connection is tracked without disturbing the screen', () => {
 test('an unchanged connection changes nothing', () => {
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
   assert.equal(play([connection(true)], playing), playing);
+});
+
+// --- seats held by clients that no longer exist ---------------------------
+
+// A presence flag is cleared by the database's disconnect hook, which the server
+// only fires once it notices the socket is gone. For a client that was killed or
+// frozen that can take minutes, and until then the seat reads as occupied — so a
+// player who was cut off mid-game was told GAME IN PROGRESS by their own
+// abandoned seat. A seat is now held by a client still saying so.
+
+const NOW = 1_700_000_000_000;
+const stale = NOW - SEAT_STALE_MS - 1;
+const fresh = NOW - 1000;
+
+// A room whose seats carry heartbeats, as the database would hold it.
+const roomSeen = (one, two) => ({
+  players: {
+    1: one === null ? { present: false } : { present: true, seen: one },
+    2: two === null ? { present: false } : { present: true, seen: two },
+  },
+});
+
+test('a seat whose heartbeat has stopped can be taken', () => {
+  assert.equal(claimSeat(roomSeen(stale, fresh), 'PLANET', NOW).seat, 1);
+});
+
+test('a seat that is still beating cannot be taken', () => {
+  // Both held, so there is nowhere to sit and the room reports itself full.
+  assert.equal(claimSeat(roomSeen(fresh, fresh), 'PLANET', NOW).seat, null);
+});
+
+test('a room of nothing but abandoned seats is reset, not joined', () => {
+  const claim = claimSeat(roomSeen(stale, stale), 'PLANET', NOW);
+
+  assert.equal(claim.seat, 1);
+  // Reset rather than adopted: the previous game's word and guesses would
+  // otherwise start this one already half played.
+  assert.equal(claim.room.word, 'PLANET');
+  assert.deepEqual(claim.room.guessed, []);
+});
+
+test('taking a seat stamps it, so it is never held without a heartbeat', () => {
+  assert.equal(claimSeat(roomSeen(null, null), 'PLANET', NOW).room.players[1].seen, NOW);
+});
+
+test('a seat with no heartbeat at all counts as held', () => {
+  // If the database rules ever reject the heartbeat field, every seat reads as
+  // unstamped. Treating that as empty would evict both players from every game,
+  // continuously; treating it as held degrades to the behaviour before
+  // heartbeats existed. It also leaves rooms written by an older build alone.
+  const unstamped = { players: { 1: { present: true }, 2: { present: true } } };
+  assert.equal(claimSeat(unstamped, 'PLANET', NOW).seat, null);
+});
+
+test('a partner whose heartbeat stops counts as gone, flag or no flag', () => {
+  // A frozen client holds its socket open, so the server never fires the hook
+  // that would clear the flag. Without reading the heartbeat, the game would
+  // wait forever on a turn belonging to somebody who is not coming back.
+  const playing = play([hydrate(roomSeen(fresh, fresh), 'MARBLE')], seated(1));
+  const silent = play(
+    [{ type: 'hydrate', room: roomSeen(fresh, stale), newWord: 'MARBLE', now: NOW }],
+    playing,
+  );
+
+  assert.equal(silent.partnerAbsent, true);
+  assert.equal(statusNotice(silent), PARTNER_AWAY);
+});
+
+test('a partner still beating is still there', () => {
+  const playing = play(
+    [{ type: 'hydrate', room: roomSeen(fresh, fresh), newWord: 'MARBLE', now: NOW }],
+    seated(1),
+  );
+
+  assert.equal(playing.screen, 'playing');
+  assert.equal(playing.partnerAbsent, false);
+});
+
+test('a heartbeat is carried through the room untouched', () => {
+  assert.equal(normalizeRoom(roomSeen(fresh, null)).players[1].seen, fresh);
+  // Absent rather than defaulted to a number: "no heartbeat" and "a heartbeat
+  // from long ago" mean different things and only one of them frees the seat.
+  assert.equal(normalizeRoom(roomSeen(null, null)).players[1].seen, null);
 });

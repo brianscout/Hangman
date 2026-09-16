@@ -71,6 +71,18 @@
         "$seat": {
           ".validate": "$seat === '1' || $seat === '2'",
           "present": { ".validate": "newData.isBoolean()" },
+          // The seat's heartbeat, in server milliseconds. A seat is held by a
+          // client still saying so rather than by a flag nobody cleared: the
+          // disconnect hook only fires once the server notices the socket is
+          // gone, and until then an abandoned seat tells the player who
+          // abandoned it that the room is full.
+          //
+          // Any number is accepted rather than only the server's own timestamp.
+          // A client that lied here could hold a seat forever or free somebody
+          // else's, but a client that wanted to do either could simply write the
+          // presence flag instead, which has always been open. The rule that
+          // matters is the one above it: nothing outside the room is writable.
+          "seen": { ".validate": "newData.isNumber()" },
           "$field": { ".validate": false }
         }
       },
