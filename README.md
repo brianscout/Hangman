@@ -77,6 +77,30 @@ Each client maintains a presence flag through the database's own `onDisconnect`
 hook, so quitting, crashing, a flat battery and a lost network all arrive at the
 other player as the same missing flag.
 
+A seat is held by a client still saying so, not by a flag nobody cleared. Each
+one stamps `seen` with the server's clock every ten seconds, and a seat whose
+stamp is older than forty-five counts as empty and can be taken.
+
+That exists because the disconnect hook is not enough on its own. The server
+fires it only once it notices the socket is gone, and for a client killed or
+frozen rather than closed that takes minutes — during which the abandoned seat
+tells the very player who abandoned it that the room is full. The same rule ends
+a game whose partner froze with their socket open: the flag never falls, but the
+heartbeat stops.
+
+The server's clock rather than the device's, corrected by an offset the database
+publishes. Two headsets disagreeing about the time would read each other's seats
+as long abandoned, and glasses are exactly the sort of device whose clock nobody
+has checked.
+
+A seat with no stamp at all counts as **held**, which is deliberate.
+Stale-means-empty would, if `seen` were ever unwritable, read every seat as
+abandoned and evict both players continuously. This way that failure is quiet.
+Note that the safeguard covers reading only: `seen` is written inside the
+transaction that takes the seat, so if the rules reject the key the whole claim
+is refused and nobody can join. **Deploy `database.rules.json` before shipping a
+change to this field.**
+
 That flag is claimed again on every reconnect, not once when the seat is taken.
 The server cannot tell a dropped socket from a player walking away and fires the
 hook for both, and the SDK then reconnects on its own — so without re-claiming,
