@@ -5,7 +5,7 @@
 // Untested on purpose: there is nothing here to get wrong that running the app
 // would not show immediately.
 
-import { initialState, reduce, wantsRoom } from './reducer.js';
+import { PARTNER_GRACE_MS, awaitingPartner, initialState, reduce, wantsRoom } from './reducer.js';
 import { render } from './render.js';
 import { joinRoom } from './room.js';
 import { pickWord } from './words.js';
@@ -29,6 +29,7 @@ let state = initialState();
 let seatHeld = null;
 let claiming = false;
 let noticeTimer = null;
+let partnerTimer = null;
 
 function dispatch(action) {
   // Every action carries a freshly drawn word, which the reducer uses only if
@@ -52,6 +53,7 @@ function dispatch(action) {
   if (outbox !== null) seatHeld?.publish(outbox);
   syncSeat();
   syncNoticeTimer();
+  syncPartnerTimer();
   if (state.screen === 'exited') exitApp();
 }
 
@@ -114,6 +116,26 @@ function syncNoticeTimer() {
   } else {
     clearTimeout(noticeTimer);
     noticeTimer = null;
+  }
+}
+
+// How long the game waits for a partner whose presence has gone. Reconciled
+// against the state rather than started when they vanish, so a partner who comes
+// back and goes again gets a fresh thirty seconds rather than the remains of the
+// last one — and so no path out of the game can leave a clock running that would
+// later end a game nobody is playing.
+function syncPartnerTimer() {
+  const wanted = awaitingPartner(state);
+  if (wanted === (partnerTimer !== null)) return;
+
+  if (wanted) {
+    partnerTimer = setTimeout(() => {
+      partnerTimer = null;
+      dispatch({ type: 'partnerGone' });
+    }, PARTNER_GRACE_MS);
+  } else {
+    clearTimeout(partnerTimer);
+    partnerTimer = null;
   }
 }
 

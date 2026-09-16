@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "hangman",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8000"],
-      "port": 8000
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/dev-server.js"],
+      "port": 8001
     }
   ]
 }

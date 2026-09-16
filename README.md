@@ -32,6 +32,7 @@ a dead game. The connectivity probe that proved the design possible has moved to
 | `database.rules.json` | The database security rules, as deployed. The record of them. |
 | `test/` | Node's built-in test runner. No dependencies. |
 | `scripts/probe.html` | The connectivity probe, kept as a diagnostic. |
+| `scripts/dev-server.js` | The local server. Serves the files and forbids caching them. |
 
 ## Playing alone
 
@@ -74,8 +75,25 @@ its guesses would start this one already half played.
 
 Each client maintains a presence flag through the database's own `onDisconnect`
 hook, so quitting, crashing, a flat battery and a lost network all arrive at the
-other player as the same missing flag. Losing your partner shows PARTNER LEFT and
-returns you to the lobby. There is no reconnect grace period.
+other player as the same missing flag.
+
+That flag is claimed again on every reconnect, not once when the seat is taken.
+The server cannot tell a dropped socket from a player walking away and fires the
+hook for both, and the SDK then reconnects on its own — so without re-claiming,
+a client that recovered in a second stayed absent for the rest of the game.
+
+And a missing partner does not end the game for thirty seconds. Ending it on the
+first missing flag meant one blip on one headset took **both** players out: the
+partner saw the flag go, walked back to the lobby, and dropped their own presence
+on the way, so by the time the first client was back there was nobody left to
+play. During the wait the card says PARTNER RECONNECTING in place of the turn,
+because a pause with nothing said about it is what a player reads as the app
+having stopped. A partner whose presence returns first clears the flag and the
+game carries on with the round untouched.
+
+The clock lives in the entry module and is reconciled against the state, the same
+way the seat and the notice timer are, so no path out of a game can leave one
+running.
 
 ## The word
 

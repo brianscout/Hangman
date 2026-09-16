@@ -76,6 +76,30 @@ export async function joinRoom(onRoom) {
   // message is exactly what a dying client cannot send.
   await db.onDisconnect(presenceRef).set(false);
 
+  // Claimed again on every reconnect, rather than once when the seat was taken.
+  //
+  // A dropped socket is not the same thing as a player leaving, but the server
+  // cannot tell them apart and fires the hook for both. The SDK then reconnects
+  // on its own — and without this, nothing would put the flag back, so a client
+  // that recovered in a second would stay absent for the rest of the game. One
+  // blip on one headset took both players out: the partner saw the flag go,
+  // walked back to the lobby, and dropped their own on the way.
+  //
+  // `.info/connected` is the SDK's own account of whether it is talking to the
+  // server, and it goes true again on every reconnect, which is exactly when
+  // this has to run.
+  const stopPresence = db.onValue(db.ref(database, '.info/connected'), (snapshot) => {
+    if (snapshot.val() !== true) return;
+
+    // The hook is re-armed before the flag goes back up. The other order leaves
+    // a window where this client is present with nothing registered to clear it,
+    // and a drop inside that window strands the seat as occupied forever.
+    db.onDisconnect(presenceRef)
+      .set(false)
+      .then(() => db.set(presenceRef, true))
+      .catch(() => {});
+  });
+
   const unsubscribe = db.onValue(roomRef, (snapshot) => onRoom(snapshot.val()));
 
   return {
@@ -105,6 +129,10 @@ export async function joinRoom(onRoom) {
 
     leave() {
       unsubscribe();
+      // Before anything else. The reconnect watcher exists to put this client's
+      // presence back, and left running it would do exactly that to a seat the
+      // player has just given up.
+      stopPresence();
       // Cancel first, then clear. The other order would let the hook fire on a
       // later disconnect and write false over a seat somebody else has taken.
       db.onDisconnect(presenceRef).cancel()

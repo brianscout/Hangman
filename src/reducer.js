@@ -51,6 +51,24 @@ export const NO_CONNECTION = 'NO CONNECTION';
 export const YOUR_TURN = 'YOUR TURN';
 export const PARTNER_TURN = "PARTNER'S TURN";
 
+// Shown while the other player is out of contact but not yet given up on. A
+// dropped socket and a player walking away look identical from here, so the card
+// says what it knows rather than guessing: somebody is missing, and the game is
+// still waiting for them.
+export const PARTNER_AWAY = 'PARTNER RECONNECTING';
+
+// How long a partner may be missing before the game ends. Presence is a socket,
+// and a socket drops for reasons that have nothing to do with the player holding
+// it — a sleeping display, a WiFi handover, a NAT timing out an idle connection.
+// Ending the game on the first missing flag meant one blip on one headset took
+// both players out, because the partner bailed to the lobby and dropped their own
+// presence on the way.
+//
+// Thirty seconds is long enough to walk out of range and back. The card says it
+// is waiting, so the pause is explained rather than read as the app having
+// stopped.
+export const PARTNER_GRACE_MS = 30000;
+
 // The end of the game, in the same place on the card as the turn it replaces.
 // Both players are always told the same one of these: there is one word, one
 // gallows and one result, and the result is shared whichever of them brought it
@@ -94,6 +112,11 @@ export function initialState() {
     // is a flag on the state rather than a second set of screens: one word, one
     // gallows, one keyboard, one set of endings, and four rules that read it.
     solo: false,
+    // Whether the partner's presence has gone and the game is waiting to see
+    // whether it comes back. The clock that decides how long belongs to the
+    // entry module, for the same reason the notice timer does: this module has
+    // no access to one and is tested without it.
+    partnerAbsent: false,
   };
 }
 
@@ -195,6 +218,11 @@ function reducePlaying(state, action) {
       return over ? activateEnd(state, action.newWord) : guess(state);
     case 'hydrate':
       return hydratePlaying(state, action);
+    case 'partnerGone':
+      // The grace period has run out. Anything that could have brought the
+      // partner back would have cleared the flag before this arrived, so a flag
+      // still set here means they are not coming.
+      return state.partnerAbsent ? { ...state, screen: 'notice', notice: PARTNER_LEFT } : state;
     default:
       return state;
   }
@@ -349,13 +377,21 @@ function pair(state) {
 
   // The second player's arrival starts the game on both cards. Neither player
   // presses start; each simply sees the other appear in the room.
-  if (state.screen === 'waiting' && partnerPresent) return { ...state, screen: 'playing' };
+  if (state.screen === 'waiting' && partnerPresent) {
+    return { ...state, screen: 'playing', partnerAbsent: false };
+  }
 
-  // No reconnect grace period. Quitting, crashing, a flat battery and a dead
-  // network all arrive here as the same missing flag, which is the whole point of
-  // maintaining presence through the database's own disconnect hook.
-  if (state.screen === 'playing' && !partnerPresent) {
-    return { ...state, screen: 'notice', notice: PARTNER_LEFT };
+  // Quitting, crashing, a flat battery and a dead network all arrive here as the
+  // same missing flag, which is the whole point of maintaining presence through
+  // the database's own disconnect hook — but so does a socket that dropped and is
+  // already coming back, and the two are indistinguishable from here.
+  //
+  // So the flag is recorded and the game waits. The entry module runs the clock
+  // and says when it has waited long enough; a partner whose presence returns
+  // first clears the flag and the game carries on as though nothing happened.
+  if (state.screen === 'playing') {
+    const partnerAbsent = !partnerPresent;
+    return partnerAbsent === state.partnerAbsent ? state : { ...state, partnerAbsent };
   }
 
   return state;
@@ -602,6 +638,11 @@ export function statusNotice(state) {
       // apart, and its space is kept rather than collapsed so the card does not
       // shift under the player when the ending lands in it.
       if (state.solo) return '';
+      // A missing partner takes the line over. Whose turn it is stops being the
+      // useful thing to say the moment the answer might be nobody's, and a card
+      // that went on insisting it was the partner's turn while they were gone
+      // would be the app looking broken rather than looking busy.
+      if (state.partnerAbsent) return PARTNER_AWAY;
       return isMyTurn(state) ? YOUR_TURN : PARTNER_TURN;
   }
 }
@@ -609,6 +650,14 @@ export function statusNotice(state) {
 // Whether this state wants a live seat in the room. The entry module reconciles
 // the connection against this rather than reacting to individual transitions, so
 // no path out of the room can forget to release the seat.
+// Whether the grace period should be running. The entry module reconciles its
+// timer against this rather than starting one at a particular transition, for the
+// same reason it reconciles the seat: a partner can go and come back more than
+// once, and reconciling means no path can leave a stale clock running.
+export function awaitingPartner(state) {
+  return state.screen === 'playing' && state.partnerAbsent;
+}
+
 export function wantsRoom(state) {
   // A solo game is played entirely on this client. It never claims a seat, so it
   // never writes presence, and it cannot take a seat from two people who are

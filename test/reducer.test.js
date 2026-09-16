@@ -7,6 +7,7 @@ import {
   LOBBY_OPTIONS,
   MAX_WRONG,
   NO_CONNECTION,
+  PARTNER_AWAY,
   PARTNER_LEFT,
   PARTNER_TURN,
   ROOM_BUSY,
@@ -14,6 +15,7 @@ import {
   YOUR_TURN,
   YOU_LOSE,
   YOU_WIN,
+  awaitingPartner,
   claimSeat,
   focusedLetter,
   focusedOption,
@@ -42,6 +44,9 @@ import {
 const move = (direction) => ({ type: 'move', direction });
 const joined = (seat) => ({ type: 'joined', seat });
 const dismissNotice = () => ({ type: 'dismissNotice' });
+// The grace period running out, which the entry module sends on a timer. The
+// reducer has no clock, so a test says when it expired rather than waiting.
+const partnerGone = () => ({ type: 'partnerGone' });
 
 // Every action carries a freshly drawn word, exactly as the entry module hands
 // one to the reducer, because any transition may turn out to be the one that
@@ -290,9 +295,9 @@ test('failing to reach the room reports it rather than waiting forever', () => {
 
 // --- losing the other player ----------------------------------------------
 
-test('losing the partner shows PARTNER LEFT', () => {
+test('losing the partner shows PARTNER LEFT once the grace period is up', () => {
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
-  const abandoned = play([hydrate(roomWith(1))], playing);
+  const abandoned = play([hydrate(roomWith(1)), partnerGone()], playing);
 
   assert.equal(abandoned.screen, 'notice');
   assert.equal(abandoned.notice, PARTNER_LEFT);
@@ -300,7 +305,7 @@ test('losing the partner shows PARTNER LEFT', () => {
 
 test('PARTNER LEFT returns to the lobby', () => {
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
-  const returned = play([hydrate(roomWith(1)), dismissNotice()], playing);
+  const returned = play([hydrate(roomWith(1)), partnerGone(), dismissNotice()], playing);
 
   assert.equal(returned.screen, 'lobby');
   assert.deepEqual(returned, initialState());
@@ -308,31 +313,83 @@ test('PARTNER LEFT returns to the lobby', () => {
 
 test('losing the partner gives up this seat as well', () => {
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
-  assert.equal(wantsRoom(play([hydrate(roomWith(1))], playing)), false);
+  const waiting = play([hydrate(roomWith(1))], playing);
+
+  // The seat is kept while the game is still hoping the partner comes back.
+  // Giving it up then would clear this client's own presence and take the other
+  // player out too, which is the cascade the grace period exists to stop.
+  assert.equal(wantsRoom(waiting), true);
+  assert.equal(wantsRoom(play([partnerGone()], waiting)), false);
 });
 
 test('a room emptied of both players is still a partner leaving', () => {
   // A snapshot can arrive after this client's own flag has gone too. What
   // matters is the partner, not the count.
   const playing = play([hydrate(roomWith(1, 2))], seated(2));
-  assert.equal(play([hydrate(null)], playing).notice, PARTNER_LEFT);
+  assert.equal(play([hydrate(null), partnerGone()], playing).notice, PARTNER_LEFT);
 });
 
-test('there is no grace period before the partner counts as gone', () => {
+test('a partner going missing does not end the game on its own', () => {
+  // A dropped socket and a player walking away look identical from here. Ending
+  // the game on the first missing flag meant one blip on one headset took both
+  // players out: the partner bailed to the lobby and dropped their own presence
+  // on the way, so neither of them had anybody left to play.
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
-  assert.equal(play([hydrate(roomWith(1))], playing).screen, 'notice');
+  const waiting = play([hydrate(roomWith(1))], playing);
+
+  assert.equal(waiting.screen, 'playing');
+  assert.equal(waiting.partnerAbsent, true);
+  assert.equal(awaitingPartner(waiting), true);
+});
+
+test('the card says it is waiting rather than naming a turn', () => {
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  assert.equal(statusNotice(play([hydrate(roomWith(1))], playing)), PARTNER_AWAY);
+});
+
+test('a partner who comes back carries on where they were', () => {
+  const playing = play([hydrate(gameOf('PLANET', ['P']))], seated(1));
+  const waiting = play([hydrate({ ...gameOf('PLANET', ['P']), ...roomWith(1) })], playing);
+  const back = play([hydrate(gameOf('PLANET', ['P']))], waiting);
+
+  assert.equal(back.screen, 'playing');
+  assert.equal(back.partnerAbsent, false);
+  assert.equal(awaitingPartner(back), false);
+  // The round is untouched: a blip is not a reason to lose the guesses.
+  assert.equal(maskedWord(back), 'P-----');
+});
+
+test('the clock is not left running once the partner is back', () => {
+  // The entry module reconciles its timer against this, so a stale true would
+  // end a game nobody had left.
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  assert.equal(awaitingPartner(play([hydrate(roomWith(1, 2))], playing)), false);
+});
+
+test('the grace period expiring is ignored if the partner is already back', () => {
+  // The timer and the snapshot race. A partner who returned first has cleared
+  // the flag, and a late expiry must not end a game that recovered.
+  const playing = play([hydrate(roomWith(1, 2))], seated(1));
+  const recovered = play([hydrate(roomWith(1)), hydrate(roomWith(1, 2))], playing);
+
+  assert.equal(play([partnerGone()], recovered), recovered);
+});
+
+test('a solo game is never waiting on a partner', () => {
+  assert.equal(awaitingPartner(alone()), false);
+  assert.equal(statusNotice(alone()), '');
 });
 
 test('a late room snapshot cannot revive a finished game', () => {
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
-  const abandoned = play([hydrate(roomWith(1))], playing);
+  const abandoned = play([hydrate(roomWith(1)), partnerGone()], playing);
 
   assert.equal(play([hydrate(roomWith(1, 2))], abandoned), abandoned);
 });
 
 test('keypresses do nothing on a notice screen', () => {
   const playing = play([hydrate(roomWith(1, 2))], seated(1));
-  const abandoned = play([hydrate(roomWith(1))], playing);
+  const abandoned = play([hydrate(roomWith(1)), partnerGone()], playing);
 
   assert.equal(play([move('down'), activate()], abandoned), abandoned);
 });
@@ -1022,7 +1079,7 @@ test('Exit to Lobby gives up the seat, which is what releases the partner', () =
   assert.equal(left.seat, null);
 
   const partner = play(
-    [hydrate({ word: 'PLANET', guessed: [...'PLANET'], turn: 1, ...roomWith(2) })],
+    [hydrate({ word: 'PLANET', guessed: [...'PLANET'], turn: 1, ...roomWith(2) }), partnerGone()],
     ended(2, 1),
   );
 
